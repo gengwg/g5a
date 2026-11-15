@@ -11,15 +11,17 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	alertStateFiring       = "firing"
-	alertStateNormal       = "normal"
-	alertStateNoData       = "no_data"
-	alertStateError        = "error"
-	alertRuleSourceGrafana = "grafana"
+	alertStateFiring           = "firing"
+	alertStateNormal           = "normal"
+	alertStateNoData           = "no_data"
+	alertStateError            = "error"
+	alertRuleSourceGrafana     = "grafana"
+	alertRuleSourceConcurrency = 4
 )
 
 // AlertRule is one alert rule and its currently matching instances.
@@ -72,6 +74,12 @@ type alertRuleDatasource struct {
 type alertRuleSource struct {
 	UID  string
 	Name string
+}
+
+type alertRuleSourceResult struct {
+	source alertRuleSource
+	rules  []AlertRule
+	err    error
 }
 
 type prometheusRulesResponse struct {
@@ -198,24 +206,51 @@ func (c *Client) fetchAllAlertRules(
 
 	rules := make([]AlertRule, 0)
 	succeeded := 0
-	for _, source := range sources {
-		sourceRules, err := c.fetchAlertRulesFromSource(ctx, source.UID, opts, dashboardUID)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, warnings, err
-			}
-			warnings = append(warnings, fmt.Sprintf("querying alert rules from %s: %v", source.Name, err))
-			sourceErrs = append(sourceErrs, fmt.Errorf("%s: %w", source.Name, err))
+	results := c.fetchAlertRulesFromSources(ctx, sources, opts, dashboardUID)
+	if err := ctx.Err(); err != nil {
+		return nil, warnings, err
+	}
+	for _, result := range results {
+		if result.err != nil {
+			warnings = append(warnings, fmt.Sprintf("querying alert rules from %s: %v", result.source.Name, result.err))
+			sourceErrs = append(sourceErrs, fmt.Errorf("%s: %w", result.source.Name, result.err))
 			continue
 		}
 		succeeded++
-		rules = append(rules, sourceRules...)
+		rules = append(rules, result.rules...)
 	}
 	if succeeded == 0 && len(sourceErrs) > 0 {
 		return nil, warnings, fmt.Errorf("querying alert rules: %w", errors.Join(sourceErrs...))
 	}
 
 	return rules, warnings, nil
+}
+
+func (c *Client) fetchAlertRulesFromSources(
+	ctx context.Context,
+	sources []alertRuleSource,
+	opts alertListOptions,
+	dashboardUID string,
+) []alertRuleSourceResult {
+	results := make([]alertRuleSourceResult, len(sources))
+	semaphore := make(chan struct{}, alertRuleSourceConcurrency)
+	var waitGroup sync.WaitGroup
+	for index, source := range sources {
+		waitGroup.Go(func() {
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				results[index] = alertRuleSourceResult{source: source, rules: nil, err: ctx.Err()}
+				return
+			}
+			rules, err := c.fetchAlertRulesFromSource(ctx, source.UID, opts, dashboardUID)
+			results[index] = alertRuleSourceResult{source: source, rules: rules, err: err}
+		})
+	}
+	waitGroup.Wait()
+
+	return results
 }
 
 func supportedAlertRuleDatasource(datasource alertRuleDatasource) bool {

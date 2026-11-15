@@ -37,15 +37,15 @@ Download an archive from the [latest release](https://github.com/gengwg/g5a/rele
 
 | Platform | amd64 | arm64 |
 |----------|-------|-------|
-| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_linux_arm64.tar.gz) |
-| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_darwin_arm64.tar.gz) |
-| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_windows_arm64.zip) |
+| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_linux_arm64.tar.gz) |
+| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_darwin_arm64.tar.gz) |
+| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_windows_arm64.zip) |
 
-Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/checksums.txt), then extract and run it. For example, on Linux amd64:
+Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/checksums.txt), then extract and run it. For example, on Linux amd64:
 
 ```sh
-curl -LO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.3/g5a_v0.1.3_linux_amd64.tar.gz
-tar -xzf g5a_v0.1.3_linux_amd64.tar.gz
+curl -LO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.4/g5a_v0.1.4_linux_amd64.tar.gz
+tar -xzf g5a_v0.1.4_linux_amd64.tar.gz
 ./g5a --url https://play.grafana.org
 ```
 

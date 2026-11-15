@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,6 +152,55 @@ func TestQueryAlertListMergesAllSupportedSources(t *testing.T) {
 		"/api/prometheus/amazon/api/v1/rules",
 		"/api/prometheus/azure/api/v1/rules",
 	}, gotRequests)
+}
+
+func TestQueryAlertListFetchesSourcesConcurrently(t *testing.T) {
+	t.Parallel()
+
+	var active, maxActive atomic.Int32
+	ruleNames := map[string]string{
+		"/api/prometheus/grafana/api/v1/rules": "Grafana",
+		"/api/prometheus/prom-a/api/v1/rules":  "A",
+		"/api/prometheus/prom-b/api/v1/rules":  "B",
+		"/api/prometheus/prom-c/api/v1/rules":  "C",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/datasources" {
+			_, _ = w.Write([]byte(`[
+				{"uid":"prom-a","name":"A","type":"prometheus"},
+				{"uid":"prom-b","name":"B","type":"prometheus"},
+				{"uid":"prom-c","name":"C","type":"prometheus"}
+			]`))
+			return
+		}
+		name, ok := ruleNames[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		current := active.Add(1)
+		for {
+			previous := maxActive.Load()
+			if current <= previous || maxActive.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		active.Add(-1)
+		writeAlertRules(w, fmt.Sprintf(
+			`[{"name":%q,"state":"firing","type":"alerting","alerts":[{"state":"firing","labels":{}}]}]`,
+			name,
+		))
+	}))
+	defer server.Close()
+
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	result, err := client.QueryAlertList(t.Context(), grafana.Panel{Options: json.RawMessage(`{}`)}, "", nil, nil)
+	require.NoError(t, err)
+	assert.Len(t, result.Alerts, len(ruleNames))
+	assert.GreaterOrEqual(t, maxActive.Load(), int32(2))
+	assert.LessOrEqual(t, maxActive.Load(), int32(4))
 }
 
 func TestQueryAlertListExplicitDatasourceOnly(t *testing.T) {
