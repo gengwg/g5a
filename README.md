@@ -29,16 +29,34 @@ See [the compatibility guide](docs/compatibility.md) for the exact supported sub
 
 ## Installation
 
-Download a prebuilt archive from the [latest release](https://github.com/gengwg/g5a/releases/latest). Archives are available for Linux, macOS, and Windows on amd64 and arm64, with SHA-256 checksums.
+### Prebuilt binaries
 
-For example, on Linux amd64:
+Download an archive from the [latest release](https://github.com/gengwg/g5a/releases/latest):
+
+| Platform | amd64 | arm64 |
+|----------|-------|-------|
+| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_linux_arm64.tar.gz) |
+| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_darwin_arm64.tar.gz) |
+| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_windows_arm64.zip) |
+
+Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/checksums.txt), then extract and run it. For example, on Linux amd64:
 
 ```sh
+curl -LO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_linux_amd64.tar.gz
 tar -xzf g5a_v0.1.1_linux_amd64.tar.gz
 ./g5a --url https://play.grafana.org
 ```
 
-To build from source, Go 1.26 or newer is required:
+### Go install
+
+If Go 1.26 or newer is already installed:
+
+```sh
+go install github.com/gengwg/g5a/cmd/g5a@latest
+g5a --url https://play.grafana.org
+```
+
+### Build from source
 
 ```sh
 git clone https://github.com/gengwg/g5a.git
