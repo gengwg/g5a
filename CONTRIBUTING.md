@@ -18,4 +18,6 @@ Use sanitized dashboard JSON and DataFrame responses that reproduce the relevant
 
 ## Commit and release hygiene
 
-Use imperative commit subjects and do not commit generated binaries. Releases are built with GoReleaser. Keep the MIT license and upstream copyright notices intact.
+Use imperative commit subjects and do not commit generated binaries or `dist/`. Keep the MIT license and upstream copyright notices intact.
+
+Build release archives with `make release VERSION=vX.Y.Z`, or run `./scripts/build-release.sh vX.Y.Z [output-directory]` directly. The script requires Go, tar, zip, and sha256sum, and produces Linux, macOS, and Windows archives for amd64 and arm64, plus relative SHA-256 checksums. Archives include the binary, `LICENSE`, and `NOTICE`.
