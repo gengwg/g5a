@@ -32,6 +32,13 @@ type dashboardRefreshMsg struct {
 	generation int
 }
 
+type panelBodyCache struct {
+	result *grafana.QueryResult
+	body   string
+	width  int
+	height int
+}
+
 type dashboardLoadErrorMsg struct {
 	err error
 }
@@ -43,9 +50,10 @@ type dashboardView struct {
 	dashboard *grafana.Dashboard
 	instances []grafana.PanelInstance
 
-	results map[string]*grafana.QueryResult
-	errors  map[string]error
-	loading map[string]bool
+	results   map[string]*grafana.QueryResult
+	errors    map[string]error
+	loading   map[string]bool
+	bodyCache map[string]panelBodyCache
 
 	variableValues  map[string]string
 	variableOptions map[string][]string
@@ -73,6 +81,7 @@ func newDashboardView(client *grafana.Client, uid string) *dashboardView {
 		results:   make(map[string]*grafana.QueryResult),
 		errors:    make(map[string]error),
 		loading:   make(map[string]bool),
+		bodyCache: make(map[string]panelBodyCache),
 		timeRange: grafana.TimeRange{From: defaultTimeFrom, To: timeNow},
 		semaphore: make(chan struct{}, dashboardQueryConcurrency),
 	}
@@ -130,7 +139,7 @@ func (d *dashboardView) handleDashboardLoaded(
 		}
 	}
 	if !d.refreshSet {
-		d.refresh = dashboardRefreshInterval(d.dashboard.Refresh)
+		d.refresh = dashboardRefreshInterval(string(d.dashboard.Refresh))
 	}
 
 	return d, d.resolveVariables()
@@ -289,6 +298,7 @@ func (d *dashboardView) expandPanels() {
 	d.results = make(map[string]*grafana.QueryResult)
 	d.errors = make(map[string]error)
 	d.loading = make(map[string]bool)
+	d.bodyCache = make(map[string]panelBodyCache)
 	d.selected = min(d.selected, max(len(d.instances)-1, 0))
 	d.scroll = 0
 }
@@ -352,8 +362,10 @@ func (d *dashboardView) fetchPanel(
 		}
 
 		maxDataPoints := max(width, 20)
-		result, err := d.client.QueryPanel(
+		result, err := queryPanelData(
 			ctx,
+			d.client,
+			d.uid,
 			instance.Panel,
 			timeRange,
 			maxDataPoints,
@@ -563,16 +575,25 @@ func (d *dashboardView) renderPanelBody(
 		return centerText("No data", width, height)
 	}
 
-	renderer := RendererForPanel(instance.Panel.Type)
-	if len(result.Warnings) == 0 {
-		return renderer.Render(result, instance.Panel, width, height, nil)
+	if cached, ok := d.bodyCache[instance.Key]; ok &&
+		cached.result == result && cached.width == width && cached.height == height {
+		return cached.body
 	}
 
-	warning := "! " + strings.Join(result.Warnings, "; ")
-	warning = truncateTableText(warning, width)
-	body := renderer.Render(result, instance.Panel, width, max(height-1, 1), nil)
+	renderer := RendererForPanel(instance.Panel.Type)
+	renderHeight := height
+	warning := ""
+	if len(result.Warnings) > 0 {
+		warning = "! " + strings.Join(result.Warnings, "; ")
+		warning = truncateTableText(warning, width) + "\n"
+		renderHeight = max(height-1, 1)
+	}
+	body := warning + renderer.Render(result, instance.Panel, width, renderHeight, nil)
+	d.bodyCache[instance.Key] = panelBodyCache{
+		result: result, body: body, width: width, height: height,
+	}
 
-	return warning + "\n" + body
+	return body
 }
 
 func (d *dashboardView) Title() string {
@@ -598,8 +619,8 @@ func (d *dashboardView) KeyBindings() []key.Binding {
 
 func dashboardRefreshInterval(value string) time.Duration {
 	if value != "" {
-		if interval, err := time.ParseDuration(value); err == nil && interval > 0 {
-			return interval
+		if interval, err := time.ParseDuration(value); err == nil {
+			return max(interval, 0)
 		}
 	}
 

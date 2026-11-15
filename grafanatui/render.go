@@ -80,22 +80,6 @@ func (r *textRenderer) Render(
 	return lipgloss.NewStyle().Width(width).Height(height).Render(options.Content)
 }
 
-// alertListRenderer is an explicit placeholder until alert browsing is added.
-type alertListRenderer struct{}
-
-func (r *alertListRenderer) Render(
-	_ *grafana.QueryResult,
-	_ grafana.Panel,
-	width, height int,
-	_ map[string]bool,
-) string {
-	return lipgloss.Place(
-		width, height,
-		lipgloss.Center, lipgloss.Center,
-		"Alert-list rendering is not implemented yet",
-	)
-}
-
 // unsupportedRenderer shows a message for unsupported panel types.
 type unsupportedRenderer struct {
 	panelType string

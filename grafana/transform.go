@@ -18,7 +18,7 @@ func ApplyTransformations(
 	result *QueryResult,
 	transformations []Transformation,
 ) {
-	materializeLabelFields(result)
+	materializeLabelFields(result, requiredLabelFields(result, transformations))
 	for _, t := range transformations {
 		switch t.ID {
 		case "filterFieldsByName":
@@ -31,6 +31,8 @@ func ApplyTransformations(
 			applyFilterByValue(result, t.Options)
 		case "convertFieldType":
 			applyConvertFieldType(result, t.Options)
+		case "calculateField":
+			applyCalculateField(result, t.Options)
 		case "reduce":
 			applyReduce(result, t.Options)
 		case "groupingToMatrix":
@@ -258,26 +260,52 @@ func (j *dataFrameJoin) dataFrame() DataFrame {
 		nameCounts[field.Name]++
 	}
 
-	usedNames := make(map[string]int, len(j.frame.Schema.Fields))
 	for i := 1; i < len(j.frame.Schema.Fields); i++ {
 		field := &j.frame.Schema.Fields[i]
-		if nameCounts[field.Name] == 1 {
-			continue
+		if nameCounts[field.Name] > 1 {
+			field.Name += " #" + j.sourceRefIDs[i]
 		}
-		baseName := field.Name + " #" + j.sourceRefIDs[i]
-		field.Name = baseName
-		if usedNames[baseName] > 0 {
-			field.Name = baseName + "-" + strconv.Itoa(usedNames[baseName]+1)
-		}
-		usedNames[baseName]++
 	}
 
 	j.frame.Data.Values = make([]json.RawMessage, len(j.columns))
 	for i, column := range j.columns {
 		j.frame.Data.Values[i] = mustMarshal(column)
 	}
+	j.coalesceDuplicateFields()
 
 	return j.frame
+}
+
+func (j *dataFrameJoin) coalesceDuplicateFields() {
+	fields := make([]DataFrameField, 0, len(j.frame.Schema.Fields))
+	columns := make([]json.RawMessage, 0, len(j.frame.Data.Values))
+	indexes := make(map[string]int, len(j.frame.Schema.Fields))
+
+	for index, field := range j.frame.Schema.Fields {
+		if existing, duplicate := indexes[field.Name]; duplicate {
+			var left, right []any
+			if err := json.Unmarshal(columns[existing], &left); err != nil {
+				continue
+			}
+			if err := json.Unmarshal(j.frame.Data.Values[index], &right); err != nil {
+				continue
+			}
+			for row := range left {
+				if row < len(right) && left[row] == nil && right[row] != nil {
+					left[row] = right[row]
+				}
+			}
+			columns[existing] = mustMarshal(left)
+			continue
+		}
+
+		indexes[field.Name] = len(fields)
+		fields = append(fields, field)
+		columns = append(columns, j.frame.Data.Values[index])
+	}
+
+	j.frame.Schema.Fields = fields
+	j.frame.Data.Values = columns
 }
 
 func joinRowKey(value any) string {
@@ -881,34 +909,24 @@ func reduceSeriesToRows(frame *DataFrame, opts reduceOptions) {
 // reducer function.
 func applyReducer(values []float64, reducer string) float64 {
 	switch reducer {
-	case "last":
-		return reduceLastValue(values)
-	case "first":
+	case reducerLast:
+		return values[len(values)-1]
+	case reducerFirst:
 		return values[0]
-	case "min":
+	case reducerMin:
 		return reduceMin(values)
-	case "max":
+	case reducerMax:
 		return reduceMax(values)
-	case "mean":
+	case reducerMean:
 		return reduceMean(values)
-	case "sum":
+	case reducerSum:
 		return reduceSum(values)
-	case "count":
+	case reducerCount:
 		return float64(len(values))
 	default:
 		slog.Debug("unsupported reducer, skipping", "reducer", reducer)
 		return math.NaN()
 	}
-}
-
-func reduceLastValue(values []float64) float64 {
-	for i := range slices.Backward(values) {
-		if !math.IsNaN(values[i]) {
-			return values[i]
-		}
-	}
-
-	return math.NaN()
 }
 
 func reduceMin(values []float64) float64 {

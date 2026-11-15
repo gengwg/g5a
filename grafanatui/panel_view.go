@@ -414,8 +414,8 @@ func (p *panelView) fetchPanelData() tea.Cmd {
 	p.loading = true
 
 	return func() tea.Msg {
-		result, err := client.QueryPanel(
-			ctx, panel, timeRange, width,
+		result, err := queryPanelData(
+			ctx, client, p.uid, panel, timeRange, width,
 			variables, variableOverrides, allPanels,
 		)
 		if err != nil {

@@ -11,7 +11,7 @@ The name is a numeronym for **Grafana**: `g + 5 letters + a`, in the same style 
 ![Public Grafana Play dashboard browser](docs/images/public-dashboard-list.png)
 ![Public synthetic service health dashboard](docs/images/public-demo-grid.png)
 
-Screenshots use Grafana Play’s public demo data, not private company dashboards.
+Screenshots use public or synthetic demo data, never private company dashboards.
 
 ## Features
 
@@ -20,9 +20,10 @@ Screenshots use Grafana Play’s public demo data, not private company dashboard
 - Horizontal and vertical repeated panels with responsive terminal wrapping.
 - Datasource, custom, constant, `label_values`, and `query_result` variables, including multi-select and All, plus datasource-native `queryType` variables.
 - Grafana `/api/ds/query` requests that preserve instant/range and datasource-specific target fields.
-- DataFrame joins, label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `sortBy`, and `merge`.
+- DataFrame joins, selective label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `sortBy`, `merge`, and row calculations.
+- Read-only alert-list panels with list/stat views, custom label grouping, current-state filters, folders, instance labels, and legacy API fallback.
 - Shared field mappings, thresholds, units, decimals, overrides, datasource display names, timestamp formatting, and no-value handling.
-- Bounded concurrent refresh, cancellation, stale-response protection, and per-panel errors.
+- Bounded concurrent refresh, cancellation, stale-response protection, cached panel rendering, and per-panel errors.
 - Token and basic authentication, with no request or response bodies written to logs.
 
 See [the compatibility guide](docs/compatibility.md) for the exact supported subset and current limitations.
@@ -35,15 +36,15 @@ Download an archive from the [latest release](https://github.com/gengwg/g5a/rele
 
 | Platform | amd64 | arm64 |
 |----------|-------|-------|
-| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_linux_arm64.tar.gz) |
-| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_darwin_arm64.tar.gz) |
-| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_windows_arm64.zip) |
+| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_linux_arm64.tar.gz) |
+| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_darwin_arm64.tar.gz) |
+| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_windows_arm64.zip) |
 
-Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/checksums.txt), then extract and run it. For example, on Linux amd64:
+Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/checksums.txt), then extract and run it. For example, on Linux amd64:
 
 ```sh
-curl -LO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.1/g5a_v0.1.1_linux_amd64.tar.gz
-tar -xzf g5a_v0.1.1_linux_amd64.tar.gz
+curl -LO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.2/g5a_v0.1.2_linux_amd64.tar.gz
+tar -xzf g5a_v0.1.2_linux_amd64.tar.gz
 ./g5a --url https://play.grafana.org
 ```
 
@@ -125,7 +126,7 @@ In a zoomed panel, `j`/`k` navigates panels, `g` opens the panel picker, and `f`
 
 ## Security
 
-The application performs read-only dashboard, datasource, and query API requests. It does not edit dashboards, alerting rules, or datasource configuration.
+The application performs read-only dashboard, datasource, query, and alert-rule API requests. It does not edit dashboards, alerting rules, silences, or datasource configuration.
 
 Request and response bodies are not logged or included in returned error strings. Logs contain only method, path, status, and byte counts. URL userinfo is removed from transport errors. On Linux, the default log is `${XDG_CACHE_HOME:-~/.cache}/g5a/g5a.log`; the directory is created with mode `0700` and the file with mode `0600`. Other platforms use the corresponding `os.UserCacheDir` location.
 

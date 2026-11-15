@@ -9,6 +9,7 @@ Unsupported transformations and panel types are shown explicitly rather than sil
 - Classic dashboard JSON from `GET /api/dashboards/uid/:uid`.
 - Dashboard search through `GET /api/search`.
 - Panel and variable queries through Grafana's backend APIs, primarily `POST /api/ds/query`.
+- Current alert rules through `/api/prometheus/:uid/api/v1/rules`, with legacy `/api/alerts` fallback.
 - Grafana versions that retain these legacy read APIs. Grafana 13 deprecates some `/api` routes but keeps them operational.
 - The newer `/apis/dashboard.grafana.app` v1/v2 endpoints are not yet used directly.
 
@@ -49,17 +50,18 @@ First-class support for the current dashboard viewer:
 | Panel | Behavior |
 |-------|----------|
 | `stat` | Reductions, mappings, thresholds, units, labels, foreground/background colors |
-| `table` | Typed cells, sorting, mappings, thresholds, units, per-column overrides, truncation |
+| `table` | Typed cells, time-aligned multi-series columns, sorting, mappings, thresholds, units, per-column overrides, truncation |
 | `timeseries` / legacy `graph` | Braille lines, duplicate-name handling, units, Last/Max and other basic legend calculations |
+| `alertlist` | Unified and legacy read APIs, Grafana and supported datasource-managed rules, list/stat views, custom label grouping, filters, sorting, max items, and instance labels |
 
 Existing best-effort renderers also cover `gauge`, `bargauge`, `barchart`, `heatmap`, `histogram`, `piechart`, `state-timeline`, `status-history`, `candlestick`, `trend`, and `logs`. Their Grafana option coverage is more limited.
 
-Text and alert-list panels remain visible in navigation. Alert-list content is currently a placeholder; native alert browsing and acknowledgement are future work and are intentionally separate from dashboard querying.
+Text panels remain visible in navigation. Alert-list acknowledgement and other alerting writes are intentionally unsupported.
 
 ## Transformations
 
 - `joinByField` with outer joins across frames and refIDs, including joins on Prometheus labels.
-- Label-backed series are expanded into per-series frames before transformation so labels remain aligned with their values.
+- Labels are expanded only when needed by `joinByField`, `groupingToMatrix`, or exact-name/literal-alternative field filters; unrelated labels remain attached to their fields instead of becoming sparse table columns.
 - `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and `emptyValue`.
 - `sortBy` with ordered field rules and numeric-aware stable sorting.
 - `merge` with field-name alignment and null padding for missing fields.
@@ -67,6 +69,7 @@ Text and alert-list panels remain visible in navigation. Alert-list content is c
 - `organize`, including exclusions, renaming, and `indexByName` ordering.
 - `filterByValue`.
 - `convertFieldType` for string-to-number conversion.
+- `calculateField` with binary arithmetic and row reduction, including legacy/current operands, constants, aliases, field replacement, and time-aligned cross-query operands.
 - `reduce` with common reducers.
 
 Unknown transformation IDs produce a visible warning in the affected panel. Other transformation types are not yet implemented.
@@ -85,7 +88,7 @@ Grafana's complete field-override matcher set, color schemes, data links, and ev
 
 ## Refresh and failures
 
-- Dashboard refresh interval, or 30 seconds when unspecified.
+- Dashboard refresh interval, or 30 seconds when unspecified; string durations and `refresh: false` are accepted.
 - Explicit CLI interval overrides and `--refresh=0` to disable polling.
 - Bounded panel-query concurrency and cancellation on new refreshes.
 - Stale responses cannot overwrite newer variable/time selections.

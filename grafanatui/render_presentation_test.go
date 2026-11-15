@@ -81,6 +81,80 @@ func TestTableRenderer_OverridesAndSorting(t *testing.T) {
 	}
 }
 
+func TestTableRenderer_JoinsSeriesFramesByTime(t *testing.T) {
+	t.Parallel()
+
+	newSeries := func(name string, values string) grafana.DataFrame {
+		return grafana.DataFrame{
+			Schema: grafana.DataFrameSchema{RefID: "A", Fields: []grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Config: json.RawMessage(
+					`{"displayNameFromDS":"` + name + `"}`,
+				)},
+			}},
+			Data: grafana.DataFrameData{Values: []json.RawMessage{
+				json.RawMessage(`[1000,2000]`), json.RawMessage(values),
+			}},
+		}
+	}
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newSeries("gpu-0", `[0,111]`), newSeries("gpu-1", `[2,333]`)}},
+	}}
+
+	output := grafanatui.RendererForPanel("table").Render(result, grafana.Panel{}, 100, 6, nil)
+	for _, expected := range []string{"gpu-0", "gpu-1"} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("output does not contain series header %q:\n%s", expected, output)
+		}
+	}
+	foundJoinedRow := false
+	for line := range strings.SplitSeq(output, "\n") {
+		if strings.Contains(line, "111") && strings.Contains(line, "333") {
+			foundJoinedRow = true
+		}
+	}
+	if !foundJoinedRow {
+		t.Errorf("second timestamp does not contain both series values:\n%s", output)
+	}
+}
+
+func TestTableRenderer_PreservesRepeatedAndNullTimestamps(t *testing.T) {
+	t.Parallel()
+
+	newSeries := func(name string, values string) grafana.DataFrame {
+		return grafana.DataFrame{
+			Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Config: json.RawMessage(
+					`{"displayNameFromDS":"` + name + `"}`,
+				)},
+			}},
+			Data: grafana.DataFrameData{Values: []json.RawMessage{
+				json.RawMessage(`[1000,1000,null]`), json.RawMessage(values),
+			}},
+		}
+	}
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{
+			newSeries("gpu-0", `[111,112,113]`),
+			newSeries("gpu-1", `[211,212,213]`),
+		}},
+	}}
+
+	output := grafanatui.RendererForPanel("table").Render(result, grafana.Panel{}, 100, 6, nil)
+	for _, pair := range [][2]string{{"111", "211"}, {"112", "212"}, {"113", "213"}} {
+		found := false
+		for line := range strings.SplitSeq(output, "\n") {
+			if strings.Contains(line, pair[0]) && strings.Contains(line, pair[1]) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing repeated/null timestamp row %v:\n%s", pair, output)
+		}
+	}
+}
+
 func TestTableRenderer_LabelFieldsSurviveFiltering(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +179,7 @@ func TestTableRenderer_LabelFieldsSurviveFiltering(t *testing.T) {
 		Options: json.RawMessage(`{"showHeader":true}`),
 		Transformations: []grafana.Transformation{
 			{ID: "filterFieldsByName", Options: json.RawMessage(
-				`{"include":{"pattern":"^(cluster|signal|Value)$"}}`,
+				`{"include":{"pattern":"^(cluster|signal|Value.*)$"}}`,
 			)},
 			{ID: "organize", Options: json.RawMessage(
 				`{"indexByName":{"cluster":0,"signal":1,"Value":2}}`,
@@ -189,18 +263,13 @@ func TestTableRenderer_FormatsTimeFields(t *testing.T) {
 	}
 }
 
-func TestTextAndAlertListRenderers(t *testing.T) {
+func TestTextRenderer(t *testing.T) {
 	t.Parallel()
 
 	textPanel := grafana.Panel{Options: json.RawMessage(`{"content":"Read this first"}`)}
 	textOutput := grafanatui.RendererForPanel("text").Render(nil, textPanel, 60, 5, nil)
 	if !strings.Contains(textOutput, "Read this first") {
 		t.Errorf("text content missing: %q", textOutput)
-	}
-
-	alertOutput := grafanatui.RendererForPanel("alertlist").Render(nil, grafana.Panel{}, 60, 5, nil)
-	if !strings.Contains(alertOutput, "not implemented") {
-		t.Errorf("alert-list placeholder missing: %q", alertOutput)
 	}
 }
 

@@ -320,6 +320,21 @@ func TestTableRenderer(t *testing.T) {
 	}
 }
 
+func TestTableRenderer_NarrowColumnsRemainReadable(t *testing.T) {
+	t.Parallel()
+
+	renderer := grafanatui.RendererForPanel("table")
+	result := fixtureTableResult(
+		[]string{"cluster", "NotReady", "Total"},
+		[][]string{{"alpha", "1", "4"}},
+	)
+
+	output := renderer.Render(result, emptyPanel(), 16, 4, nil)
+	if !strings.Contains(output, "NotReady") {
+		t.Errorf("expected complete NotReady header in narrow table, got %q", output)
+	}
+}
+
 func TestTableRenderer_Truncation(t *testing.T) {
 	t.Parallel()
 
@@ -342,6 +357,28 @@ func TestTableRenderer_Truncation(t *testing.T) {
 
 	if !strings.Contains(output, "more rows") {
 		t.Error("expected truncation message in output")
+	}
+}
+
+func BenchmarkTableRendererLargeResult(b *testing.B) {
+	headers := make([]string, 10)
+	for index := range headers {
+		headers[index] = "column-" + strconv.Itoa(index)
+	}
+	rows := make([][]string, 10000)
+	for rowIndex := range rows {
+		rows[rowIndex] = make([]string, len(headers))
+		for columnIndex := range headers {
+			rows[rowIndex][columnIndex] = strconv.Itoa(rowIndex + columnIndex)
+		}
+	}
+	result := fixtureTableResult(headers, rows)
+	renderer := grafanatui.RendererForPanel("table")
+	panel := emptyPanel()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		renderer.Render(result, panel, 100, 10, nil)
 	}
 }
 

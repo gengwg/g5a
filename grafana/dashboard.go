@@ -3,6 +3,7 @@ package grafana
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 )
@@ -18,13 +19,45 @@ type DashboardSearchResult struct {
 	FolderTitle string   `json:"folderTitle"`
 }
 
+// RefreshInterval accepts Grafana's string, boolean, and numeric refresh forms.
+type RefreshInterval string
+
+// UnmarshalJSON decodes a dashboard refresh interval.
+func (r *RefreshInterval) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*r = RefreshInterval(text)
+		return nil
+	}
+
+	var disabled bool
+	if err := json.Unmarshal(data, &disabled); err == nil {
+		if disabled {
+			*r = ""
+		} else {
+			*r = "0s"
+		}
+		return nil
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		*r = RefreshInterval(number.String())
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s", errInvalidRefresh, string(data))
+}
+
+var errInvalidRefresh = errors.New("invalid dashboard refresh value")
+
 // Dashboard represents a Grafana dashboard.
 type Dashboard struct {
-	Title      string        `json:"title"`
-	Panels     []Panel       `json:"panels"`
-	Templating Templating    `json:"templating"`
-	Time       DashboardTime `json:"time"`
-	Refresh    string        `json:"refresh"`
+	Title      string          `json:"title"`
+	Panels     []Panel         `json:"panels"`
+	Templating Templating      `json:"templating"`
+	Time       DashboardTime   `json:"time"`
+	Refresh    RefreshInterval `json:"refresh"`
 }
 
 // Panel represents a single panel within a dashboard.

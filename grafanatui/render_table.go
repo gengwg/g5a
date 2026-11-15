@@ -14,7 +14,7 @@ import (
 
 const (
 	tableColumnPadding = 2
-	tableMinColWidth   = 3
+	tableMinColWidth   = 8
 )
 
 type tableRenderer struct{}
@@ -36,6 +36,16 @@ type tableColumn struct {
 
 type tableRow struct {
 	values []any
+}
+
+type tableFrameData struct {
+	columns []tableColumn
+	rows    []tableRow
+}
+
+type tableColumnMapping struct {
+	output int
+	input  int
 }
 
 func (r *tableRenderer) Render(
@@ -65,13 +75,16 @@ func (r *tableRenderer) Render(
 	_ = json.Unmarshal(panel.Options, &options)
 	sortTableRows(rows, columns, options)
 
-	presented := presentTableRows(rows, columns, panel.FieldConfig)
+	totalRowCount := len(rows)
+	visibleRows := rows[:min(len(rows), max(height, 0))]
+	presented := presentTableRows(visibleRows, columns, panel.FieldConfig)
 	colWidths := calculateColumnWidths(columns, presented, width)
 	lines := renderTableLines(
 		columns,
 		presented,
 		colWidths,
 		height,
+		totalRowCount,
 		options.ShowHeader == nil || *options.ShowHeader,
 	)
 
@@ -88,8 +101,7 @@ func collectTableData(
 	}
 	slices.Sort(refIDs)
 
-	var columns []tableColumn
-	rows := make([]tableRow, 0)
+	frames := make([]tableFrameData, 0)
 	for _, refID := range refIDs {
 		for _, frame := range result.Results[refID].Frames {
 			frameColumns := tableColumns(frame.Schema.Fields, fieldConfig)
@@ -97,17 +109,134 @@ func collectTableData(
 			if err != nil || len(frameRows) == 0 {
 				continue
 			}
-			if len(columns) == 0 {
-				columns = frameColumns
-			}
-			if !sameTableFields(columns, frameColumns) {
-				continue
-			}
-			rows = append(rows, frameRows...)
+			frames = append(frames, tableFrameData{columns: frameColumns, rows: frameRows})
+		}
+	}
+	if len(frames) == 0 {
+		return nil, nil
+	}
+	if joinedColumns, joinedRows, ok := joinTableFrames(frames); ok {
+		return joinedColumns, joinedRows
+	}
+
+	columns := frames[0].columns
+	rows := make([]tableRow, 0)
+	for _, frame := range frames {
+		if sameTableFields(columns, frame.columns) {
+			rows = append(rows, frame.rows...)
 		}
 	}
 
 	return columns, rows
+}
+
+func joinTableFrames(frames []tableFrameData) ([]tableColumn, []tableRow, bool) {
+	if len(frames) < 2 {
+		return nil, nil, false
+	}
+	for _, frame := range frames[1:] {
+		if !sameTableFields(frames[0].columns, frame.columns) {
+			return joinTimeSeriesFrames(frames)
+		}
+	}
+
+	return nil, nil, false
+}
+
+func joinTimeSeriesFrames(frames []tableFrameData) ([]tableColumn, []tableRow, bool) {
+	timeIndexes := make([]int, len(frames))
+	for index, frame := range frames {
+		timeIndexes[index] = tableTimeFieldIndex(frame.columns)
+		if timeIndexes[index] < 0 {
+			return nil, nil, false
+		}
+	}
+
+	columns, mappings := timeSeriesTableColumns(frames, timeIndexes)
+	rows := joinTimeSeriesRows(frames, timeIndexes, mappings, len(columns))
+
+	return columns, rows, true
+}
+
+func timeSeriesTableColumns(
+	frames []tableFrameData,
+	timeIndexes []int,
+) ([]tableColumn, [][]tableColumnMapping) {
+	firstTime := timeIndexes[0]
+	columns := []tableColumn{frames[0].columns[firstTime]}
+	usedHeaders := map[string]bool{columns[0].header: true}
+	mappings := make([][]tableColumnMapping, len(frames))
+	for frameIndex, frame := range frames {
+		for inputIndex, column := range frame.columns {
+			if inputIndex == timeIndexes[frameIndex] {
+				continue
+			}
+			column.header = uniqueTableHeader(column.header, usedHeaders)
+			mappings[frameIndex] = append(mappings[frameIndex], tableColumnMapping{
+				output: len(columns), input: inputIndex,
+			})
+			columns = append(columns, column)
+		}
+	}
+
+	return columns, mappings
+}
+
+func joinTimeSeriesRows(
+	frames []tableFrameData,
+	timeIndexes []int,
+	mappings [][]tableColumnMapping,
+	columnCount int,
+) []tableRow {
+	rows := make([]tableRow, 0)
+	rowIndexes := make(map[string]int)
+	for frameIndex, frame := range frames {
+		seenTimes := make(map[string]int, len(frame.rows))
+		for _, inputRow := range frame.rows {
+			timeValue := inputRow.values[timeIndexes[frameIndex]]
+			baseKey := fmt.Sprintf("%T:%v", timeValue, timeValue)
+			occurrence := seenTimes[baseKey]
+			seenTimes[baseKey] = occurrence + 1
+			key := fmt.Sprintf("%s#%d", baseKey, occurrence)
+			outputIndex, exists := rowIndexes[key]
+			if !exists {
+				outputIndex = len(rows)
+				rowIndexes[key] = outputIndex
+				rows = append(rows, tableRow{values: make([]any, columnCount)})
+				rows[outputIndex].values[0] = timeValue
+			}
+			for _, mapping := range mappings[frameIndex] {
+				if mapping.input < len(inputRow.values) {
+					rows[outputIndex].values[mapping.output] = inputRow.values[mapping.input]
+				}
+			}
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return compareTableValues(rows[i].values[0], rows[j].values[0]) < 0
+	})
+
+	return rows
+}
+
+func tableTimeFieldIndex(columns []tableColumn) int {
+	for index, column := range columns {
+		if column.field.Type == fieldTypeTime {
+			return index
+		}
+	}
+
+	return -1
+}
+
+func uniqueTableHeader(header string, used map[string]bool) string {
+	candidate := header
+	for suffix := 2; used[candidate]; suffix++ {
+		candidate = fmt.Sprintf("%s #%d", header, suffix)
+	}
+	used[candidate] = true
+
+	return candidate
 }
 
 func tableColumns(
@@ -165,7 +294,7 @@ func sameTableFields(left, right []tableColumn) bool {
 		return false
 	}
 	for index := range left {
-		if left[index].field.Name != right[index].field.Name {
+		if left[index].field.Name != right[index].field.Name || left[index].header != right[index].header {
 			return false
 		}
 	}
@@ -315,6 +444,7 @@ func renderTableLines(
 	rows [][]fieldPresentation,
 	widths []int,
 	maxHeight int,
+	totalRowCount int,
 	showHeader bool,
 ) []string {
 	lines := make([]string, 0, maxHeight)
@@ -333,7 +463,7 @@ func renderTableLines(
 		return lines[:maxHeight]
 	}
 	displayCount := min(len(rows), remainingHeight)
-	truncated := len(rows) > remainingHeight
+	truncated := totalRowCount > remainingHeight
 	if truncated {
 		displayCount = min(len(rows), max(remainingHeight-1, 0))
 	}
@@ -341,7 +471,7 @@ func renderTableLines(
 		lines = append(lines, formatTableRow(rows[index], widths, columns, false))
 	}
 	if truncated && len(lines) < maxHeight {
-		lines = append(lines, fmt.Sprintf("... and %d more rows", len(rows)-displayCount))
+		lines = append(lines, fmt.Sprintf("... and %d more rows", totalRowCount-displayCount))
 	}
 
 	return lines

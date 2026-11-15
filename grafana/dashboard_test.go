@@ -78,6 +78,32 @@ func TestGetDashboard(t *testing.T) {
 	assertDashboard(t, dashboard)
 }
 
+func TestGetDashboard_RefreshBoolean(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(
+				`{"dashboard":{"title":"Test","refresh":false,"panels":[],` +
+					`"templating":{"list":[]},"time":{"from":"now-1h","to":"now"}}}`,
+			))
+		},
+	))
+	defer server.Close()
+
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dashboard, err := client.GetDashboard(t.Context(), "test")
+	if err != nil {
+		t.Fatalf("getting dashboard: %v", err)
+	}
+	if dashboard.Refresh != "0s" {
+		t.Errorf("refresh = %q, want 0s", dashboard.Refresh)
+	}
+}
+
 //nolint:exhaustruct // test data intentionally omits fields
 func TestFlattenPanels(t *testing.T) {
 	t.Parallel()

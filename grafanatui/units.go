@@ -14,6 +14,7 @@ const (
 	grafanaRed    = "#F2495C"
 	grafanaYellow = "#FADE2A"
 	grafanaOrange = "#FF9830"
+	grafanaBlue   = "#5794F2"
 
 	siKilo = 1_000.0
 	siMega = 1_000_000.0
@@ -538,7 +539,7 @@ var grafanaColors = map[string]string{ //nolint:gochecknoglobals // read-only lo
 	"light-red":       "#FF7383",
 	"super-light-red": "#FFA6B0",
 
-	"blue":             "#5794F2",
+	"blue":             grafanaBlue,
 	"dark-blue":        "#1F60C4",
 	"semi-dark-blue":   "#3274D9",
 	"light-blue":       "#8AB8FF",
