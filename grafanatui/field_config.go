@@ -69,7 +69,7 @@ func presentField(
 	config = applyFieldConfig(config, raw, field.Name)
 	displayName := config.displayName
 	if displayName == "" {
-		displayName = datasourceDisplayName(field.Config)
+		displayName = compactDatasourceName(datasourceDisplayName(field.Config))
 	}
 	if displayName == "" {
 		displayName = field.Name
@@ -107,6 +107,23 @@ func presentField(
 	}
 
 	return presentation
+}
+
+func compactDatasourceName(name string) string {
+	name = strings.TrimSpace(name)
+	open := strings.Index(name, "{")
+	if open < 0 {
+		return name
+	}
+	if open > 0 {
+		return name[:open]
+	}
+
+	if value, ok := firstSeriesLabelValue(name); ok {
+		return value
+	}
+
+	return name
 }
 
 func datasourceDisplayName(raw json.RawMessage) string {

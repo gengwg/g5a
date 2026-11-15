@@ -7,7 +7,7 @@ Unsupported transformations and panel types are shown explicitly rather than sil
 ## Dashboard model and APIs
 
 - Classic dashboard JSON from `GET /api/dashboards/uid/:uid`.
-- Dashboard resources from `/apis/dashboard.grafana.app/{v2,v2beta1,v1beta1,v1}/namespaces/default/dashboards/:uid`, with GridLayout and RowsLayout converted into the existing dashboard model. AutoGrid and Tabs layouts, library panels, and unsupported variable kinds return explicit errors.
+- Dashboard resources from `/apis/dashboard.grafana.app/{v2,v2beta1,v1beta1,v1}/namespaces/default/dashboards/:uid`, with GridLayout, RowsLayout, AutoGrid, and Tabs converted into the existing dashboard model. Tabs are stacked with text headings; AutoGrid uses the configured columns and row heights. Library panels and unsupported variable kinds return explicit errors.
 - Dashboard search through `GET /api/search`.
 - Panel and variable queries through Grafana's backend APIs, primarily `POST /api/ds/query`.
 - Current alert rules through `/api/prometheus/:uid/api/v1/rules`, with legacy `/api/alerts` fallback.
@@ -40,7 +40,7 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 - Classic `gridPos` layout on a 24-column grid.
 - Horizontal and vertical panel repeats with scoped variable values.
 - `repeatDirection` and `maxPerRow`.
-- Row repeats, tabs, AutoGrid, and library panels are not yet implemented. Schema v2 GridLayout and RowsLayout are supported.
+- Row repeats and library panels are not yet implemented. Schema v2 GridLayout, RowsLayout, AutoGrid, and stacked Tabs are supported.
 - Narrow terminals reduce repeated-panel columns and scroll vertically.
 
 ## Panel types
@@ -53,6 +53,7 @@ First-class support for the current dashboard viewer:
 | `table` | Typed cells, time-aligned multi-series columns, sorting, mappings, thresholds, units, per-column overrides, truncation |
 | `timeseries` / legacy `graph` | Braille lines, duplicate-name handling, units, Last/Max and other basic legend calculations |
 | `alertlist` | Unified and legacy read APIs, Grafana and supported datasource-managed rules, list/stat views, custom label grouping, filters, sorting, max items, and instance labels |
+| `geomap` | Latitude/longitude points on an ASCII coordinate grid, aliases, names/labels, values, threshold colors, and exact point rows |
 
 Existing best-effort renderers also cover `gauge`, `bargauge`, `barchart`, `heatmap`, `histogram`, `piechart`, `state-timeline`, `status-history`, `candlestick`, `trend`, and `logs`. Their Grafana option coverage is more limited.
 
@@ -77,7 +78,7 @@ Unknown transformation IDs produce a visible warning in the affected panel. Othe
 ## Field presentation
 
 - DataFrame `field.Config`, panel defaults, and ordered `byName` / `byRegexp` overrides.
-- Display names, datasource `displayNameFromDS`, and `${__field.labels.name}` interpolation.
+- Display names, compact datasource `displayNameFromDS` names (metric prefix or first label value), and `${__field.labels.name}` interpolation.
 - Units, decimals, no-value text, min/max, and absolute/percentage thresholds.
 - DataFrame time fields rendered as local timestamps.
 - Value, range, regex, null, and NaN mappings.

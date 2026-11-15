@@ -180,7 +180,7 @@ func classicV2Variable(source dashboardV2Variable) (TemplateVariable, error) {
 		}
 		return variable, nil
 	case v2CustomVariableKind:
-		return classicSimpleV2Variable(source, "custom")
+		return classicSimpleV2Variable(source, variableTypeCustom)
 	case "ConstantVariable":
 		return classicSimpleV2Variable(source, "constant")
 	case "TextVariable":

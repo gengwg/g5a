@@ -128,7 +128,7 @@ func (c *Client) QueryAlertList(
 	if err != nil {
 		return nil, err
 	}
-	if opts.GroupMode == "custom" && opts.ViewMode != "stat" {
+	if opts.GroupMode == variableTypeCustom && opts.ViewMode != "stat" {
 		rules = groupAlertRules(rules, opts.GroupBy)
 	}
 	sortAlertRules(rules, opts.SortOrder)

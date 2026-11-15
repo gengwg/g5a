@@ -9,6 +9,11 @@ import (
 	"net/url"
 )
 
+const (
+	dashboardV2GridColumns = 24
+	dashboardLayoutGrid    = "GridLayout"
+)
+
 var (
 	errUnsupportedV2Layout  = errors.New("unsupported dashboard v2 layout")
 	errV2ElementNotFound    = errors.New("dashboard element not found")
@@ -82,9 +87,12 @@ type dashboardV2Layout struct {
 }
 
 type dashboardV2LayoutSpec struct {
-	Items []dashboardV2LayoutItem `json:"items"`
-	Rows  []dashboardV2LayoutRow  `json:"rows"`
-	Tabs  []dashboardV2LayoutTab  `json:"tabs"`
+	Items          []dashboardV2LayoutItem `json:"items"`
+	Rows           []dashboardV2LayoutRow  `json:"rows"`
+	Tabs           []dashboardV2LayoutTab  `json:"tabs"`
+	MaxColumnCount int                     `json:"maxColumnCount"`
+	RowHeight      int                     `json:"rowHeight"`
+	RowHeightMode  string                  `json:"rowHeightMode"`
 }
 
 type dashboardV2LayoutItem struct {
@@ -115,6 +123,7 @@ type dashboardV2LayoutRow struct {
 type dashboardV2LayoutTab struct {
 	Kind string `json:"kind"`
 	Spec struct {
+		Title  string            `json:"title"`
 		Layout dashboardV2Layout `json:"layout"`
 	} `json:"spec"`
 }
@@ -203,16 +212,41 @@ func (spec dashboardV2Spec) classicDashboard() (*Dashboard, error) {
 	}, nil
 }
 
-func (spec dashboardV2Spec) panels() ([]Panel, error) {
-	return spec.Layout.panels(spec.Elements)
+type v2IDAllocator struct{ next int }
+
+func newV2IDAllocator(elements map[string]dashboardV2Element) *v2IDAllocator {
+	maxID := len(elements)
+	for _, element := range elements {
+		maxID = max(maxID, element.Spec.ID)
+	}
+
+	return &v2IDAllocator{next: maxID + 1}
 }
 
-func (layout dashboardV2Layout) panels(elements map[string]dashboardV2Element) ([]Panel, error) {
+func (a *v2IDAllocator) nextID() int {
+	id := a.next
+	a.next++
+
+	return id
+}
+
+func (spec dashboardV2Spec) panels() ([]Panel, error) {
+	return spec.Layout.panelsWithIDs(spec.Elements, newV2IDAllocator(spec.Elements))
+}
+
+func (layout dashboardV2Layout) panelsWithIDs(
+	elements map[string]dashboardV2Element,
+	ids *v2IDAllocator,
+) ([]Panel, error) {
 	switch layout.Kind {
-	case "GridLayout":
+	case dashboardLayoutGrid:
 		return layout.gridPanels(elements, 0)
 	case "RowsLayout":
-		return layout.rowsPanels(elements)
+		return layout.rowsPanels(elements, ids)
+	case "AutoGridLayout":
+		return layout.autoGridPanels(elements)
+	case "TabsLayout":
+		return layout.tabsPanels(elements, ids)
 	default:
 		return nil, fmt.Errorf("%w: %s", errUnsupportedV2Layout, layout.Kind)
 	}
@@ -266,6 +300,7 @@ func (layout dashboardV2Layout) gridPanels(
 
 func (layout dashboardV2Layout) rowsPanels(
 	elements map[string]dashboardV2Element,
+	ids *v2IDAllocator,
 ) ([]Panel, error) {
 	panels := make([]Panel, 0)
 	yOffset := 0
@@ -273,15 +308,28 @@ func (layout dashboardV2Layout) rowsPanels(
 		if row.Kind != "RowsLayoutRow" {
 			return nil, fmt.Errorf("%w: %s", errUnsupportedV2Layout, row.Kind)
 		}
-		if row.Spec.Layout.Kind != "GridLayout" {
-			return nil, fmt.Errorf("%w: nested %s", errUnsupportedV2Layout, row.Spec.Layout.Kind)
-		}
-		rowPanels, err := row.Spec.Layout.gridPanels(elements, yOffset)
+		rowPanels, err := row.Spec.Layout.panelsAtOffset(elements, yOffset, ids)
 		if err != nil {
 			return nil, err
 		}
 		panels = append(panels, rowPanels...)
-		yOffset += gridRowsHeight(row.Spec.Layout)
+		yOffset += layoutHeight(row.Spec.Layout)
+	}
+
+	return panels, nil
+}
+
+func (layout dashboardV2Layout) panelsAtOffset(
+	elements map[string]dashboardV2Element,
+	yOffset int,
+	ids *v2IDAllocator,
+) ([]Panel, error) {
+	panels, err := layout.panelsWithIDs(elements, ids)
+	if err != nil {
+		return nil, err
+	}
+	for index := range panels {
+		panels[index].GridPos.Y += yOffset
 	}
 
 	return panels, nil
@@ -294,6 +342,106 @@ func gridRowsHeight(layout dashboardV2Layout) int {
 	}
 
 	return height + 1
+}
+
+func (layout dashboardV2Layout) autoGridPanels(
+	elements map[string]dashboardV2Element,
+) ([]Panel, error) {
+	columns := layout.autoGridColumns()
+	rowHeight := layout.autoGridRowHeight()
+	normalized := layout
+	normalized.Kind = dashboardLayoutGrid
+	for index := range normalized.Spec.Items {
+		item := &normalized.Spec.Items[index].Spec
+		item.X = (index % columns) * (dashboardV2GridColumns / columns)
+		item.Y = (index / columns) * rowHeight
+		item.Width = dashboardV2GridColumns / columns
+		item.Height = rowHeight
+	}
+
+	return normalized.gridPanels(elements, 0)
+}
+
+func (layout dashboardV2Layout) autoGridColumns() int {
+	if layout.Spec.MaxColumnCount <= 0 {
+		return 3
+	}
+
+	return min(layout.Spec.MaxColumnCount, dashboardV2GridColumns)
+}
+
+func (layout dashboardV2Layout) autoGridRowHeight() int {
+	switch layout.Spec.RowHeightMode {
+	case "short":
+		return 4
+	case "tall":
+		return 12
+	case variableTypeCustom:
+		if layout.Spec.RowHeight > 0 {
+			return layout.Spec.RowHeight
+		}
+		return 8
+	default:
+		return 8
+	}
+}
+
+func (layout dashboardV2Layout) tabsPanels(
+	elements map[string]dashboardV2Element,
+	ids *v2IDAllocator,
+) ([]Panel, error) {
+	panels := make([]Panel, 0)
+	yOffset := 0
+	for index, tab := range layout.Spec.Tabs {
+		if tab.Kind != "TabsLayoutTab" {
+			return nil, fmt.Errorf("%w: %s", errUnsupportedV2Layout, tab.Kind)
+		}
+		title := tab.Spec.Title
+		if title == "" {
+			title = fmt.Sprintf("Tab %d", index+1)
+		}
+		panels = append(panels, Panel{
+			ID: ids.nextID(), Type: "text", Title: title,
+			Targets: nil, Datasource: nil,
+			GridPos:     GridPos{H: 2, W: dashboardV2GridColumns, X: 0, Y: yOffset},
+			FieldConfig: nil,
+			Options:     mustMarshal(map[string]string{"content": "## " + title}),
+			Panels:      nil, Transformations: nil, Repeat: "", RepeatDirection: "", MaxPerRow: 0,
+		})
+		tabPanels, err := tab.Spec.Layout.panelsAtOffset(elements, yOffset+2, ids)
+		if err != nil {
+			return nil, err
+		}
+		panels = append(panels, tabPanels...)
+		yOffset += 2 + layoutHeight(tab.Spec.Layout)
+	}
+
+	return panels, nil
+}
+
+func layoutHeight(layout dashboardV2Layout) int {
+	switch layout.Kind {
+	case dashboardLayoutGrid:
+		return gridRowsHeight(layout)
+	case "AutoGridLayout":
+		columns := layout.autoGridColumns()
+		rows := (len(layout.Spec.Items) + columns - 1) / columns
+		return rows*layout.autoGridRowHeight() + 1
+	case "RowsLayout":
+		height := 1
+		for _, row := range layout.Spec.Rows {
+			height += layoutHeight(row.Spec.Layout)
+		}
+		return height
+	case "TabsLayout":
+		height := 1
+		for _, tab := range layout.Spec.Tabs {
+			height += 2 + layoutHeight(tab.Spec.Layout)
+		}
+		return height
+	default:
+		return 1
+	}
 }
 
 func dashboardRefID(index int) string {

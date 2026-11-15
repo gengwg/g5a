@@ -122,6 +122,7 @@ func (r *barChartRenderer) renderFlat(
 
 	chart := barchart.New(chartWidth, height)
 	colorIndex := 0
+	categories := make(map[string]int)
 
 	for name, value := range values {
 		if hiddenSeries[name] {
@@ -131,11 +132,16 @@ func (r *barChartRenderer) renderFlat(
 
 		color := chartColor(colorIndex)
 		style := lipgloss.NewStyle().Foreground(color)
+		category := barCategoryName(name)
+		categories[category]++
+		if categories[category] > 1 {
+			category = fmt.Sprintf("%s #%d", category, categories[category])
+		}
 
 		chart.Push(barchart.BarData{
-			Label: name,
+			Label: category,
 			Values: []barchart.BarValue{{
-				Name:  name,
+				Name:  category,
 				Value: value,
 				Style: style,
 			}},
@@ -149,6 +155,17 @@ func (r *barChartRenderer) renderFlat(
 	return lipgloss.JoinHorizontal(
 		lipgloss.Bottom, yAxis, chart.View(),
 	)
+}
+
+func barCategoryName(name string) string {
+	if value, ok := seriesLabelValueForKey(name, "vendor"); ok && value != "" {
+		return value
+	}
+	if value, ok := firstSeriesLabelValue(name); ok && value != "" {
+		return value
+	}
+
+	return name
 }
 
 // renderBarLegend draws a horizontal legend showing field names with

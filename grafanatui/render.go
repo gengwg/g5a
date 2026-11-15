@@ -39,6 +39,7 @@ var rendererFactories = map[string]func() PanelRenderer{ //nolint:gochecknogloba
 	"status-history": newTimeSeriesRenderer,
 	"candlestick":    newTimeSeriesRenderer,
 	"trend":          newTimeSeriesRenderer,
+	"geomap":         newGeoMapRenderer,
 }
 
 func newTimeSeriesRenderer() PanelRenderer { return &timeSeriesRenderer{} }
@@ -49,6 +50,7 @@ func newBarChartRenderer() PanelRenderer   { return &barChartRenderer{} }
 func newHeatmapRenderer() PanelRenderer    { return &heatmapRenderer{} }
 func newTextRenderer() PanelRenderer       { return &textRenderer{} }
 func newAlertListRenderer() PanelRenderer  { return &alertListRenderer{} }
+func newGeoMapRenderer() PanelRenderer     { return &geoMapRenderer{} }
 
 // RendererForPanel returns the appropriate renderer for a panel type.
 // Unsupported types get a fallback renderer that shows a message.

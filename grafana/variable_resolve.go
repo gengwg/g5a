@@ -14,6 +14,8 @@ import (
 	"strings"
 )
 
+const variableTypeCustom = "custom"
+
 var (
 	errNoDatasource      = errors.New("no datasource for variable")
 	errLabelValuesFailed = errors.New("label values query failed")
@@ -70,7 +72,7 @@ func (c *Client) ResolveVariableOptionsWithSelections(
 		}
 
 		switch variable.Type {
-		case "custom", "constant":
+		case variableTypeCustom, "constant":
 			opts = parseCustomVariableOptions(variable)
 		case datasourceVariableName:
 			if datasources == nil {

@@ -210,8 +210,8 @@ func renderStatValue(
 	height int,
 ) string {
 	presentation := value.presentation
-	showName := options.TextMode == "value_and_name" || options.TextMode == "name"
-	showValue := options.TextMode != "name"
+	showName := options.TextMode == "value_and_name" || options.TextMode == labelName
+	showValue := options.TextMode != labelName
 	lines := make([]string, 0, 2)
 	if showName && presentation.DisplayName != "" {
 		lines = append(lines, presentation.DisplayName)

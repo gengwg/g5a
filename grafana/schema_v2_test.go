@@ -2,8 +2,10 @@ package grafana_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gengwg/g5a/grafana"
@@ -173,10 +175,139 @@ func TestGetDashboardClassicDirectResource(t *testing.T) {
 	assert.Equal(t, "Classic direct", dashboard.Title)
 }
 
-func TestGetDashboardV2RejectsAutoGrid(t *testing.T) {
+func TestGetDashboardV2AutoGrid(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	elements := make([]string, 0, 4)
+	items := make([]string, 0, 4)
+	for id := 1; id <= 4; id++ {
+		elements = append(elements, v2TestElement(id))
+		items = append(items, v2TestItem(id, "AutoGridLayoutItem"))
+	}
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Auto",
+			"elements":{%s},
+			"layout":{"kind":"AutoGridLayout","spec":{
+				"maxColumnCount":2,"rowHeightMode":"short","items":[%s]
+			}}
+		}
+	}`, strings.Join(elements, ","), strings.Join(items, ","))
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 4)
+	want := []grafana.GridPos{
+		{H: 4, W: 12, X: 0, Y: 0},
+		{H: 4, W: 12, X: 12, Y: 0},
+		{H: 4, W: 12, X: 0, Y: 4},
+		{H: 4, W: 12, X: 12, Y: 4},
+	}
+	for index, panel := range dashboard.Panels {
+		assert.Equal(t, want[index], panel.GridPos)
+	}
+}
+
+func TestGetDashboardV2TabsAreStacked(t *testing.T) {
+	t.Parallel()
+
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Tabs",
+			"elements":{%s},
+			"layout":{"kind":"TabsLayout","spec":{"tabs":[
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"First",
+					"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+				}},
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"Second",
+					"layout":{"kind":"TabsLayout","spec":{"tabs":[
+						{"kind":"TabsLayoutTab","spec":{
+							"title":"Inner",
+							"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+						}}
+					]}}
+				}}
+			]}}
+		}
+	}`,
+		strings.Join([]string{v2TestElement(1000000), v2TestElement(2)}, ","),
+		v2TestItem(1000000, "GridLayoutItem"),
+		v2TestItem(2, "GridLayoutItem"),
+	)
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 5)
+	assert.Equal(t, "First", dashboard.Panels[0].Title)
+	assert.Equal(t, "text", dashboard.Panels[0].Type)
+	assert.Equal(t, 1000001, dashboard.Panels[0].ID)
+	assert.Equal(t, 0, dashboard.Panels[0].GridPos.Y)
+	assert.Equal(t, 2, dashboard.Panels[1].GridPos.Y)
+	assert.Equal(t, "Second", dashboard.Panels[2].Title)
+	assert.Equal(t, 1000002, dashboard.Panels[2].ID)
+	assert.Equal(t, 7, dashboard.Panels[2].GridPos.Y)
+	assert.Equal(t, "Inner", dashboard.Panels[3].Title)
+	assert.Equal(t, 1000003, dashboard.Panels[3].ID)
+	assert.Equal(t, 9, dashboard.Panels[3].GridPos.Y)
+	assert.Equal(t, 11, dashboard.Panels[4].GridPos.Y)
+}
+
+func TestGetDashboardV2TabIDsAvoidZeroElementIDs(t *testing.T) {
+	t.Parallel()
+
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Zero IDs",
+			"elements":{%s},
+			"layout":{"kind":"TabsLayout","spec":{"tabs":[
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"Only",
+					"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+				}}
+			]}}
+		}
+	}`,
+		strings.Join([]string{v2TestElement(0), v2TestElement(2)}, ","),
+		v2TestItem(0, "GridLayoutItem")+","+v2TestItem(2, "GridLayoutItem"),
+	)
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 3)
+	assert.Equal(t, 3, dashboard.Panels[0].ID)
+	assert.Equal(t, 1, dashboard.Panels[1].ID)
+	assert.Equal(t, 2, dashboard.Panels[2].ID)
+}
+
+func v2TestElement(id int) string {
+	return fmt.Sprintf(
+		`"panel-%d":{"kind":"Panel","spec":{"id":%d,"title":"Panel %d",`+
+			`"vizConfig":{"group":"stat","spec":{}},"data":{"spec":{"queries":[]}}}}`,
+		id, id, id,
+	)
+}
+
+func v2TestItem(id int, kind string) string {
+	return fmt.Sprintf(
+		`{"kind":%q,"spec":{"x":0,"y":0,"width":12,"height":4,`+
+			`"element":{"kind":"ElementReference","name":"panel-%d"}}}`,
+		kind, id,
+	)
+}
+
+func newV2TestServer(resource string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/dashboards/uid/demo" {
 			http.Error(w, "legacy unavailable", http.StatusBadRequest)
 			return
@@ -185,12 +316,6 @@ func TestGetDashboardV2RejectsAutoGrid(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(`{"spec":{"title":"Auto","layout":{"kind":"AutoGridLayout","spec":{"items":[]}}}}`))
+		_, _ = w.Write([]byte(resource))
 	}))
-	defer server.Close()
-	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
-	require.NoError(t, err)
-	_, err = client.GetDashboard(t.Context(), "demo")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported dashboard v2 layout")
 }
