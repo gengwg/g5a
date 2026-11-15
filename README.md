@@ -1,7 +1,7 @@
 # g5a
 
-[![License](https://img.shields.io/github/license/gengwg/g5a)](https://github.com/gengwg/g5a/blob/feat/full-dashboard-grid/LICENSE)
-[![Test](https://github.com/gengwg/g5a/actions/workflows/test.yml/badge.svg?branch=feat%2Ffull-dashboard-grid)](https://github.com/gengwg/g5a/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/gengwg/g5a)](https://github.com/gengwg/g5a/blob/main/LICENSE)
+[![Test](https://github.com/gengwg/g5a/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/gengwg/g5a/actions/workflows/test.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/gengwg/g5a)](https://goreportcard.com/report/github.com/gengwg/g5a)
 
 `g5a` is a read-only terminal UI for live Grafana dashboards. It connects to an existing Grafana instance, expands variables and repeated panels, queries through Grafana, and renders a responsive grid with stats, tables, and Braille time-series charts. It works over SSH and is licensed under MIT.
