@@ -13,7 +13,7 @@ import (
 	"github.com/NimbleMarkets/ntcharts/linechart"
 	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 const legendLines = 2

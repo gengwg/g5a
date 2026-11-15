@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 // panelPickerItem adapts a panel for the picker list.

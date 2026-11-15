@@ -2,7 +2,7 @@ VERSION=$(shell git describe --tags --dirty --always)
 
 .PHONY: build
 build:
-	go build -ldflags "-X 'main.version=${VERSION}'" -o grafana-tui ./cmd/grafana-tui
+	go build -ldflags "-X 'main.version=${VERSION}'" -o g5a ./cmd/g5a
 
 .PHONY: test
 test:
@@ -22,4 +22,4 @@ lint:
 
 .PHONY: clean
 clean:
-	rm -f grafana-tui
+	rm -f g5a

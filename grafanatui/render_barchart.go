@@ -7,7 +7,7 @@ import (
 
 	"github.com/NimbleMarkets/ntcharts/barchart"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 // barChartRenderer renders data as a vertical bar chart.

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 // fieldPresentation contains the renderer-independent display properties for

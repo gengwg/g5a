@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 //nolint:cyclop // end-to-end dependent-variable lifecycle assertions

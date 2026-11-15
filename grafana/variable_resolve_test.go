@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 func TestResolveVariableOptions_QueryResult(t *testing.T) {

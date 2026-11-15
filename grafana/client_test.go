@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 func TestNewClient_InvalidURL(t *testing.T) {

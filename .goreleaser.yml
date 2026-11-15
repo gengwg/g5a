@@ -1,6 +1,6 @@
 version: 2
 builds:
-  - main: ./cmd/grafana-tui/main.go
+  - main: ./cmd/g5a/main.go
     goos:
       - darwin
       - linux
@@ -29,10 +29,10 @@ changelog:
       - '^.github:'
       - Merge branch
 brews:
-  - name: grafana-tui
-    homepage: https://github.com/lovromazgon/homebrew-tap
+  - name: g5a
+    homepage: https://github.com/gengwg/homebrew-tap
     repository:
-      owner: lovromazgon
+      owner: gengwg
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     directory: Formula

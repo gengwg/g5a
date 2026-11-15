@@ -13,8 +13,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/lovromazgon/grafana-tui/grafana"
-	"github.com/lovromazgon/grafana-tui/grafanatui"
+	"github.com/gengwg/g5a/grafana"
+	"github.com/gengwg/g5a/grafanatui"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ func main() {
 	var flags flags
 
 	rootCmd := &cobra.Command{ //nolint:exhaustruct // cobra commands use optional fields
-		Use:   "grafana-tui",
+		Use:   "g5a",
 		Short: "Browse Grafana dashboards in the terminal",
 		Long: `Connect to a remote Grafana instance and browse dashboards in a
 terminal UI. Authenticate with a service account token (recommended) or
@@ -210,14 +210,14 @@ func initStderr() func() {
 		slog.Error("cannot find user cache directory", "error", err)
 		return cleanup
 	}
-	dataPath := filepath.Join(cacheDir, "grafana-tui")
+	dataPath := filepath.Join(cacheDir, "g5a")
 	if err := os.MkdirAll(dataPath, 0o700); err != nil {
 		slog.Error("error creating log directory", "error", err)
 		return cleanup
 	}
 
 	logFile, err := os.OpenFile(
-		filepath.Join(dataPath, "grafana-tui.log"),
+		filepath.Join(dataPath, "g5a.log"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
 		0o600,
 	)

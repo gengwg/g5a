@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
-	"github.com/lovromazgon/grafana-tui/grafanatui"
+	"github.com/gengwg/g5a/grafana"
+	"github.com/gengwg/g5a/grafanatui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"

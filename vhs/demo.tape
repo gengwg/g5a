@@ -1,6 +1,6 @@
 Output demo.gif
 
-Require grafana-tui
+Require g5a
 
 Set Shell zsh
 Set FontSize 18
@@ -16,7 +16,7 @@ Set TypingSpeed 50ms
 Set CursorBlink false
 
 # Launch grafana-tui
-Type "grafana-tui --url https://play.grafana.org"
+Type "g5a --url https://play.grafana.org"
 Enter
 Sleep 3s
 

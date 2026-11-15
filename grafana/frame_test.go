@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 func TestTimeSeries_Multi(t *testing.T) {

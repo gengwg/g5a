@@ -1,4 +1,4 @@
-module github.com/lovromazgon/grafana-tui
+module github.com/gengwg/g5a
 
 go 1.26.0
 

@@ -1,0 +1,13 @@
+# Origin and attribution
+
+`g5a` is based on **grafana-tui** by **Lovro Mažgon**:
+
+- Project: https://github.com/lovromazgon/grafana-tui
+- Original copyright: Copyright (c) 2026 Lovro Mažgon
+- License: MIT, retained in `LICENSE`
+
+Substantial modifications are made by `gengwg` and contributors, including the full dashboard grid, repeated panels, expanded variable/query handling, DataFrame transformations, shared field presentation, refresh lifecycle management, and public-demo screenshots.
+
+The name `g5a` is a numeronym for Grafana (`g + 5 letters + a`), in the same style as `k8s` and `o11y`.
+
+This repository is an independent public continuation, not an upstream release. There is no affiliation with or endorsement by Grafana Labs, Lovro Mažgon, or the k8s project.

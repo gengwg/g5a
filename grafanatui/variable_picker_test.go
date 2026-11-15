@@ -4,7 +4,7 @@ package grafanatui
 import (
 	"testing"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 func TestVariablePickerMultiToggle(t *testing.T) {

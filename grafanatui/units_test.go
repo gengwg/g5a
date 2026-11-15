@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/lovromazgon/grafana-tui/grafanatui"
+	"github.com/gengwg/g5a/grafanatui"
 )
 
 func TestFormatValue(t *testing.T) {

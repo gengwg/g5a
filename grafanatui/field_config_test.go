@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/gengwg/g5a/grafana"
 )
 
 func TestPresentFieldFleetValueMappings(t *testing.T) {
