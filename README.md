@@ -1,7 +1,7 @@
 # grafana-tui
 
-[![License](https://img.shields.io/github/license/lovromazgon/grafana-tui)](https://github.com/lovromazgon/grafana-tui/blob/main/LICENSE)
-[![Test](https://github.com/lovromazgon/grafana-tui/actions/workflows/test.yml/badge.svg)](https://github.com/lovromazgon/grafana-tui/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/gengwg/grafana-tui)](https://github.com/gengwg/grafana-tui/blob/feat/full-dashboard-grid/LICENSE)
+[![Test](https://github.com/gengwg/grafana-tui/actions/workflows/test.yml/badge.svg?branch=feat%2Ffull-dashboard-grid)](https://github.com/gengwg/grafana-tui/actions/workflows/test.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lovromazgon/grafana-tui)](https://goreportcard.com/report/github.com/lovromazgon/grafana-tui)
 
 Browse live Grafana dashboards in a terminal. `grafana-tui` connects to an existing Grafana instance, expands dashboard variables and repeated panels, queries through Grafana, and renders a responsive grid with stats, tables, and Braille time-series charts.
@@ -13,10 +13,10 @@ It is read-only, works over SSH, and is licensed under MIT.
 - Dashboard search and direct dashboard/panel URLs.
 - Grafana's 24-column grid with vertical scrolling and panel zoom.
 - Horizontal and vertical repeated panels with responsive terminal wrapping.
-- Datasource, custom, constant, `label_values`, and `query_result` variables, including multi-select and All.
+- Datasource, custom, constant, `label_values`, and `query_result` variables, including multi-select and All, plus datasource-native `queryType` variables.
 - Grafana `/api/ds/query` requests that preserve instant/range and datasource-specific target fields.
-- DataFrame joins, filtering, organization, reduction, and type conversion.
-- Shared field mappings, thresholds, units, decimals, overrides, and no-value handling.
+- DataFrame joins, label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `sortBy`, and `merge`.
+- Shared field mappings, thresholds, units, decimals, overrides, datasource display names, timestamp formatting, and no-value handling.
 - Bounded concurrent refresh, cancellation, stale-response protection, and per-panel errors.
 - Token and basic authentication, with no request or response bodies written to logs.
 
@@ -24,20 +24,16 @@ See [the compatibility guide](docs/compatibility.md) for the exact supported sub
 
 ## Installation
 
-Install a released version with Homebrew:
+Build this fork from source with Go 1.26 or newer:
 
 ```sh
-brew install lovromazgon/tap/grafana-tui
-```
-
-Or download a binary from the [latest release](https://github.com/lovromazgon/grafana-tui/releases/latest).
-
-To build this source tree, Go 1.26 or newer is required:
-
-```sh
+git clone https://github.com/gengwg/grafana-tui.git
+cd grafana-tui
 make build
 ./grafana-tui --url https://play.grafana.org
 ```
+
+No release artifacts have been published for this fork yet. The Homebrew package and release binaries at `lovromazgon/grafana-tui` are for the upstream project and do not include this fork's full dashboard-grid support.
 
 ## Usage
 
