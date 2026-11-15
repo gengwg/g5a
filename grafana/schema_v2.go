@@ -40,10 +40,15 @@ type dashboardV2TimeSettings struct {
 }
 
 type dashboardV2Element struct {
-	Kind string `json:"kind"`
-	Spec struct {
-		ID        int    `json:"id"`
-		Title     string `json:"title"`
+	Kind         string `json:"kind"`
+	ClassicPanel *Panel `json:"-"`
+	Spec         struct {
+		ID           int    `json:"id"`
+		Title        string `json:"title"`
+		LibraryPanel struct {
+			UID  string `json:"uid"`
+			Name string `json:"name"`
+		} `json:"libraryPanel"`
 		VizConfig struct {
 			Group   string `json:"group"`
 			Version string `json:"version"`
@@ -147,7 +152,7 @@ func (c *Client) getDashboardV2(ctx context.Context, uid string) (*Dashboard, er
 			}
 			continue
 		}
-		dashboard, err := dashboardFromResource(raw)
+		dashboard, err := c.dashboardFromResource(ctx, raw)
 		if err == nil {
 			return dashboard, nil
 		}
@@ -167,12 +172,15 @@ func dashboardFallbackStatus(err error) bool {
 		statusErr.StatusCode == http.StatusMethodNotAllowed
 }
 
-func dashboardFromResource(raw json.RawMessage) (*Dashboard, error) {
+func (c *Client) dashboardFromResource(ctx context.Context, raw json.RawMessage) (*Dashboard, error) {
 	var resource dashboardV2Resource
 	if err := json.Unmarshal(raw, &resource); err != nil {
 		return nil, fmt.Errorf("decoding dashboard resource: %w", err)
 	}
 	if len(resource.Spec.Elements) > 0 || resource.Spec.Layout.Kind != "" {
+		if err := c.resolveLibraryPanels(ctx, &resource); err != nil {
+			return nil, err
+		}
 		return resource.Spec.classicDashboard()
 	}
 
@@ -191,6 +199,36 @@ func dashboardFromResource(raw json.RawMessage) (*Dashboard, error) {
 	}
 
 	return &direct.Spec, nil
+}
+
+func (c *Client) resolveLibraryPanels(ctx context.Context, resource *dashboardV2Resource) error {
+	for name, element := range resource.Spec.Elements {
+		if element.Kind != "LibraryPanel" {
+			continue
+		}
+		uid := element.Spec.LibraryPanel.UID
+		panel, err := c.getLibraryPanel(ctx, uid)
+		if err != nil {
+			return fmt.Errorf("resolving library panel %q: %w", uid, err)
+		}
+		element.ClassicPanel = panel
+		resource.Spec.Elements[name] = element
+	}
+
+	return nil
+}
+
+func (c *Client) getLibraryPanel(ctx context.Context, uid string) (*Panel, error) {
+	var response struct {
+		Result struct {
+			Model Panel `json:"model"`
+		} `json:"result"`
+	}
+	if err := c.doJSON(ctx, "/api/library-elements/"+url.PathEscape(uid), &response); err != nil {
+		return nil, fmt.Errorf("getting library panel %q: %w", uid, err)
+	}
+
+	return &response.Result.Model, nil
 }
 
 func (spec dashboardV2Spec) classicDashboard() (*Dashboard, error) {
@@ -240,11 +278,11 @@ func (layout dashboardV2Layout) panelsWithIDs(
 ) ([]Panel, error) {
 	switch layout.Kind {
 	case dashboardLayoutGrid:
-		return layout.gridPanels(elements, 0)
+		return layout.gridPanels(elements, 0, ids)
 	case "RowsLayout":
 		return layout.rowsPanels(elements, ids)
 	case "AutoGridLayout":
-		return layout.autoGridPanels(elements)
+		return layout.autoGridPanels(elements, ids)
 	case "TabsLayout":
 		return layout.tabsPanels(elements, ids)
 	default:
@@ -255,19 +293,24 @@ func (layout dashboardV2Layout) panelsWithIDs(
 func (layout dashboardV2Layout) gridPanels(
 	elements map[string]dashboardV2Element,
 	yOffset int,
+	ids *v2IDAllocator,
 ) ([]Panel, error) {
 	panels := make([]Panel, 0, len(layout.Spec.Items))
-	for index, item := range layout.Spec.Items {
+	for _, item := range layout.Spec.Items {
 		elementName := item.Spec.Element.Name
 		element, ok := elements[elementName]
 		if !ok {
 			return nil, fmt.Errorf("%w: %s", errV2ElementNotFound, elementName)
 		}
+		if element.ClassicPanel != nil {
+			panels = append(panels, classicLibraryPanel(element, item, yOffset, ids))
+			continue
+		}
 		if element.Kind != "Panel" {
 			return nil, fmt.Errorf("%w: %s", errUnsupportedV2Element, element.Kind)
 		}
 		panel := Panel{
-			ID:    index + 1,
+			ID:    element.Spec.ID,
 			Type:  element.Spec.VizConfig.Group,
 			Title: element.Spec.Title,
 			GridPos: GridPos{
@@ -280,6 +323,9 @@ func (layout dashboardV2Layout) gridPanels(
 			Options:     element.Spec.VizConfig.Spec.Options,
 			Targets:     nil, Datasource: nil, Panels: nil, Transformations: nil,
 			Repeat: "", RepeatDirection: "", MaxPerRow: 0,
+		}
+		if panel.ID == 0 {
+			panel.ID = ids.nextID()
 		}
 		if element.Spec.ID != 0 {
 			panel.ID = element.Spec.ID
@@ -296,6 +342,38 @@ func (layout dashboardV2Layout) gridPanels(
 	}
 
 	return panels, nil
+}
+
+func classicLibraryPanel(
+	element dashboardV2Element,
+	item dashboardV2LayoutItem,
+	yOffset int,
+	ids *v2IDAllocator,
+) Panel {
+	panel := *element.ClassicPanel
+	panel.ID = element.Spec.ID
+	if panel.ID == 0 {
+		panel.ID = ids.nextID()
+	}
+	panel.Repeat = ""
+	panel.RepeatDirection = ""
+	panel.MaxPerRow = 0
+	if element.Spec.Title != "" {
+		panel.Title = element.Spec.Title
+	}
+	panel.GridPos = GridPos{
+		H: item.Spec.Height,
+		W: item.Spec.Width,
+		X: item.Spec.X,
+		Y: item.Spec.Y + yOffset,
+	}
+	if item.Spec.Repeat != nil {
+		panel.Repeat = item.Spec.Repeat.Value
+		panel.RepeatDirection = item.Spec.Repeat.Direction
+		panel.MaxPerRow = item.Spec.Repeat.MaxPerRow
+	}
+
+	return panel
 }
 
 func (layout dashboardV2Layout) rowsPanels(
@@ -346,6 +424,7 @@ func gridRowsHeight(layout dashboardV2Layout) int {
 
 func (layout dashboardV2Layout) autoGridPanels(
 	elements map[string]dashboardV2Element,
+	ids *v2IDAllocator,
 ) ([]Panel, error) {
 	columns := layout.autoGridColumns()
 	rowHeight := layout.autoGridRowHeight()
@@ -359,7 +438,7 @@ func (layout dashboardV2Layout) autoGridPanels(
 		item.Height = rowHeight
 	}
 
-	return normalized.gridPanels(elements, 0)
+	return normalized.gridPanels(elements, 0, ids)
 }
 
 func (layout dashboardV2Layout) autoGridColumns() int {

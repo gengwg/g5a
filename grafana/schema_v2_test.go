@@ -103,6 +103,177 @@ func TestGetDashboardV2GridLayout(t *testing.T) {
 	assert.True(t, variable.IncludeAll)
 }
 
+func TestGetDashboardV2LibraryPanel(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dashboards/uid/demo":
+			http.Error(w, "legacy unavailable", http.StatusBadRequest)
+		case "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/demo":
+			_, _ = w.Write([]byte(`{
+				"spec":{
+					"title":"Library",
+					"elements":{
+						"library-1":{"kind":"LibraryPanel","spec":{
+							"id":9,"title":"Shared",
+							"libraryPanel":{"uid":"shared","name":"Shared"}
+						}},
+						"library-2":{"kind":"LibraryPanel","spec":{
+							"id":0,"title":"Fallback",
+							"libraryPanel":{"uid":"shared","name":"Shared"}
+						}}
+					},
+					"layout":{"kind":"GridLayout","spec":{"items":[
+						{"kind":"GridLayoutItem","spec":{
+							"x":0,"y":2,"width":24,"height":6,
+							"element":{"kind":"ElementReference","name":"library-1"}
+						}},
+						{"kind":"GridLayoutItem","spec":{
+							"x":0,"y":8,"width":24,"height":6,
+							"element":{"kind":"ElementReference","name":"library-2"}
+						}}
+					]}}
+				}
+			}`))
+		case "/api/library-elements/shared":
+			_, _ = w.Write([]byte(`{"result":{"model":{
+				"id":0,"type":"stat","title":"Model title",
+				"datasource":{"uid":"prom1","type":"prometheus"},
+				"targets":[{"refId":"A","expr":"up","datasource":{"uid":"prom1","type":"prometheus"}}],
+				"fieldConfig":{"defaults":{}},"options":{}
+			}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 2)
+	panel := dashboard.Panels[0]
+	assert.Equal(t, 9, panel.ID)
+	assert.Equal(t, 10, dashboard.Panels[1].ID)
+	assert.Equal(t, "Shared", panel.Title)
+	assert.Equal(t, "stat", panel.Type)
+	assert.Equal(t, grafana.GridPos{H: 6, W: 24, X: 0, Y: 2}, panel.GridPos)
+	require.Len(t, panel.Targets, 1)
+	var target map[string]any
+	require.NoError(t, json.Unmarshal(panel.Targets[0].Raw(), &target))
+	assert.Equal(t, "up", target["expr"])
+}
+
+func TestGetDashboardV2LibraryInstancesUseDistinctIDsAndLayoutRepeats(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dashboards/uid/demo":
+			http.Error(w, "legacy unavailable", http.StatusBadRequest)
+		case "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/demo":
+			_, _ = w.Write([]byte(`{
+				"spec":{
+					"title":"Library instances",
+					"elements":{
+						"library-a":{"kind":"LibraryPanel","spec":{"id":0,"title":"A","libraryPanel":{"uid":"shared","name":"Shared"}}},
+						"library-b":{"kind":"LibraryPanel","spec":{"id":0,"title":"B","libraryPanel":{"uid":"shared","name":"Shared"}}}
+					},
+					"layout":{"kind":"TabsLayout","spec":{"tabs":[
+						{"kind":"TabsLayoutTab","spec":{
+							"title":"Shared",
+							"layout":{"kind":"GridLayout","spec":{"items":[
+								{"kind":"GridLayoutItem","spec":{
+									"x":0,"y":0,"width":12,"height":4,
+									"element":{"kind":"ElementReference","name":"library-a"}
+								}},
+								{"kind":"GridLayoutItem","spec":{
+									"x":12,"y":0,"width":12,"height":4,
+									"repeat":{"value":"site","direction":"h","maxPerRow":1},
+									"element":{"kind":"ElementReference","name":"library-b"}
+								}}
+							]}}
+						}}
+					]}}
+				}
+			}`))
+		case "/api/library-elements/shared":
+			_, _ = w.Write([]byte(`{"result":{"model":{
+				"id":42,"type":"stat","title":"Model",
+				"repeat":"cluster","repeatDirection":"h","maxPerRow":2
+			}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 3)
+	assert.Equal(t, 3, dashboard.Panels[0].ID)
+	assert.Equal(t, 4, dashboard.Panels[1].ID)
+	assert.Equal(t, 5, dashboard.Panels[2].ID)
+	assert.Empty(t, dashboard.Panels[1].Repeat)
+	assert.Empty(t, dashboard.Panels[1].RepeatDirection)
+	assert.Equal(t, 0, dashboard.Panels[1].MaxPerRow)
+	assert.Equal(t, "site", dashboard.Panels[2].Repeat)
+	assert.Equal(t, "h", dashboard.Panels[2].RepeatDirection)
+	assert.Equal(t, 1, dashboard.Panels[2].MaxPerRow)
+}
+
+func TestGetDashboardV2NestedMixedIDs(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dashboards/uid/demo":
+			http.Error(w, "legacy unavailable", http.StatusBadRequest)
+		case "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/demo":
+			_, _ = w.Write([]byte(`{
+				"spec":{
+					"title":"Mixed",
+					"elements":{
+						"library-a":{"kind":"LibraryPanel","spec":{
+							"id":0,"title":"Library",
+							"libraryPanel":{"uid":"shared","name":"Shared"}
+						}},
+						"panel-b":{"kind":"Panel","spec":{
+							"id":0,"title":"Panel B",
+							"vizConfig":{"group":"stat","spec":{}},
+							"data":{"spec":{"queries":[]}}
+						}}
+					},
+					"layout":{"kind":"TabsLayout","spec":{"tabs":[
+						{"kind":"TabsLayoutTab","spec":{
+							"title":"Mixed",
+							"layout":{"kind":"GridLayout","spec":{"items":[
+								{"kind":"GridLayoutItem","spec":{"x":0,"y":0,"width":12,"height":4,"element":{"name":"library-a"}}},
+								{"kind":"GridLayoutItem","spec":{"x":12,"y":0,"width":12,"height":4,"element":{"name":"panel-b"}}}
+							]}}
+						}}
+					]}}
+				}
+			}`))
+		case "/api/library-elements/shared":
+			_, _ = w.Write([]byte(`{"result":{"model":{"id":42,"type":"stat"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 3)
+	assert.Equal(t, 3, dashboard.Panels[0].ID)
+	assert.Equal(t, 4, dashboard.Panels[1].ID)
+	assert.Equal(t, 5, dashboard.Panels[2].ID)
+}
+
 func TestGetDashboardV2RowsLayoutOffsetsRows(t *testing.T) {
 	t.Parallel()
 
@@ -286,7 +457,7 @@ func TestGetDashboardV2TabIDsAvoidZeroElementIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dashboard.Panels, 3)
 	assert.Equal(t, 3, dashboard.Panels[0].ID)
-	assert.Equal(t, 1, dashboard.Panels[1].ID)
+	assert.Equal(t, 4, dashboard.Panels[1].ID)
 	assert.Equal(t, 2, dashboard.Panels[2].ID)
 }
 

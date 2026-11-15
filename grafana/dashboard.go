@@ -265,7 +265,7 @@ func (c *Client) GetDashboard(
 		}
 		return c.getDashboardV2(ctx, uid)
 	}
-	dashboard, err := dashboardFromResource(raw)
+	dashboard, err := c.dashboardFromResource(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
