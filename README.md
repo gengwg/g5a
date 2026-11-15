@@ -29,7 +29,16 @@ See [the compatibility guide](docs/compatibility.md) for the exact supported sub
 
 ## Installation
 
-Build from source with Go 1.26 or newer:
+Download a prebuilt archive from the [latest release](https://github.com/gengwg/g5a/releases/latest). Archives are available for Linux, macOS, and Windows on amd64 and arm64, with SHA-256 checksums.
+
+For example, on Linux amd64:
+
+```sh
+tar -xzf g5a_v0.1.1_linux_amd64.tar.gz
+./g5a --url https://play.grafana.org
+```
+
+To build from source, Go 1.26 or newer is required:
 
 ```sh
 git clone https://github.com/gengwg/g5a.git
@@ -38,7 +47,7 @@ make build
 ./g5a --url https://play.grafana.org
 ```
 
-No release artifacts have been published for `g5a` yet. The Homebrew package and release binaries at `lovromazgon/grafana-tui` are for the upstream project and do not include this repository's full dashboard-grid support.
+The Homebrew package and release binaries at `lovromazgon/grafana-tui` are for the upstream project and do not include this repository's full dashboard-grid support.
 
 ## Usage
 
