@@ -32,7 +32,7 @@ mkdir -p "$output_dir"
 for target in linux:amd64 linux:arm64 darwin:amd64 darwin:arm64 windows:amd64 windows:arm64; do
   os=${target%%:*}
   arch=${target##*:}
-  package_dir="$work_dir/g5a_${version_number}_${os}_${arch}"
+  package_dir="$work_dir/g5a_v${version_number}_${os}_${arch}"
   mkdir -p "$package_dir"
   binary=g5a
   if [[ "$os" == "windows" ]]; then
@@ -45,10 +45,10 @@ for target in linux:amd64 linux:arm64 darwin:amd64 darwin:arm64 windows:amd64 wi
   cp LICENSE NOTICE "$package_dir/"
 
   if [[ "$os" == "windows" ]]; then
-    archive="$output_dir/g5a_${version_number}_${os}_${arch}.zip"
+    archive="$output_dir/g5a_v${version_number}_${os}_${arch}.zip"
     zip -j -q "$archive" "$package_dir/$binary" "$package_dir/LICENSE" "$package_dir/NOTICE"
   else
-    archive="$output_dir/g5a_${version_number}_${os}_${arch}.tar.gz"
+    archive="$output_dir/g5a_v${version_number}_${os}_${arch}.tar.gz"
     tar -czf "$archive" -C "$package_dir" "$binary" LICENSE NOTICE
   fi
 done

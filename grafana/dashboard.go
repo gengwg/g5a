@@ -258,12 +258,19 @@ func (c *Client) GetDashboard(
 ) (*Dashboard, error) {
 	path := "/api/dashboards/uid/" + url.PathEscape(uid)
 
-	var wrapper dashboardResponse
-	if err := c.doJSON(ctx, path, &wrapper); err != nil {
-		return nil, fmt.Errorf("getting dashboard: %w", err)
+	var raw json.RawMessage
+	if err := c.doJSON(ctx, path, &raw); err != nil {
+		if !dashboardFallbackStatus(err) {
+			return nil, fmt.Errorf("getting dashboard: %w", err)
+		}
+		return c.getDashboardV2(ctx, uid)
+	}
+	dashboard, err := dashboardFromResource(raw)
+	if err != nil {
+		return nil, err
 	}
 
-	return &wrapper.Dashboard, nil
+	return dashboard, nil
 }
 
 // skipPanelTypes lists panel types that are not useful in terminal

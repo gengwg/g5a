@@ -1,0 +1,362 @@
+package grafana
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+)
+
+var (
+	errUnsupportedV2Layout  = errors.New("unsupported dashboard v2 layout")
+	errV2ElementNotFound    = errors.New("dashboard element not found")
+	errUnsupportedV2Element = errors.New("unsupported dashboard element kind")
+	errInvalidV2Query       = errors.New("invalid dashboard v2 query")
+)
+
+type dashboardV2Resource struct {
+	Spec dashboardV2Spec `json:"spec"`
+}
+
+type dashboardV2Spec struct {
+	Title        string                        `json:"title"`
+	TimeSettings dashboardV2TimeSettings       `json:"timeSettings"`
+	Elements     map[string]dashboardV2Element `json:"elements"`
+	Layout       dashboardV2Layout             `json:"layout"`
+	Variables    []dashboardV2Variable         `json:"variables"`
+}
+
+type dashboardV2TimeSettings struct {
+	From        string          `json:"from"`
+	To          string          `json:"to"`
+	AutoRefresh RefreshInterval `json:"autoRefresh"`
+}
+
+type dashboardV2Element struct {
+	Kind string `json:"kind"`
+	Spec struct {
+		ID        int    `json:"id"`
+		Title     string `json:"title"`
+		VizConfig struct {
+			Group   string `json:"group"`
+			Version string `json:"version"`
+			Spec    struct {
+				FieldConfig json.RawMessage `json:"fieldConfig"`
+				Options     json.RawMessage `json:"options"`
+			} `json:"spec"`
+		} `json:"vizConfig"`
+		Data struct {
+			Spec struct {
+				Queries         []dashboardV2Query `json:"queries"`
+				Transformations []struct {
+					Group string `json:"group"`
+					Spec  struct {
+						Disabled bool            `json:"disabled"`
+						Options  json.RawMessage `json:"options"`
+					} `json:"spec"`
+				} `json:"transformations"`
+			} `json:"spec"`
+		} `json:"data"`
+	} `json:"spec"`
+}
+
+type dashboardV2Query struct {
+	Spec struct {
+		RefID  string `json:"refId"`
+		Hidden bool   `json:"hidden"`
+		Query  struct {
+			Group      string `json:"group"`
+			Datasource *struct {
+				Name string `json:"name"`
+			} `json:"datasource"`
+			Spec json.RawMessage `json:"spec"`
+		} `json:"query"`
+	} `json:"spec"`
+}
+
+type dashboardV2Layout struct {
+	Kind string                `json:"kind"`
+	Spec dashboardV2LayoutSpec `json:"spec"`
+}
+
+type dashboardV2LayoutSpec struct {
+	Items []dashboardV2LayoutItem `json:"items"`
+	Rows  []dashboardV2LayoutRow  `json:"rows"`
+	Tabs  []dashboardV2LayoutTab  `json:"tabs"`
+}
+
+type dashboardV2LayoutItem struct {
+	Kind string `json:"kind"`
+	Spec struct {
+		X      int `json:"x"`
+		Y      int `json:"y"`
+		Width  int `json:"width"`
+		Height int `json:"height"`
+		Repeat *struct {
+			Value     string `json:"value"`
+			Direction string `json:"direction"`
+			MaxPerRow int    `json:"maxPerRow"`
+		} `json:"repeat"`
+		Element struct {
+			Name string `json:"name"`
+		} `json:"element"`
+	} `json:"spec"`
+}
+
+type dashboardV2LayoutRow struct {
+	Kind string `json:"kind"`
+	Spec struct {
+		Layout dashboardV2Layout `json:"layout"`
+	} `json:"spec"`
+}
+
+type dashboardV2LayoutTab struct {
+	Kind string `json:"kind"`
+	Spec struct {
+		Layout dashboardV2Layout `json:"layout"`
+	} `json:"spec"`
+}
+
+type dashboardV2Variable struct {
+	Kind string          `json:"kind"`
+	Spec json.RawMessage `json:"spec"`
+}
+
+func (c *Client) getDashboardV2(ctx context.Context, uid string) (*Dashboard, error) {
+	versions := []string{"v2", "v2beta1", "v1beta1", "v1"}
+	var lastErr error
+	for _, version := range versions {
+		path := "/apis/dashboard.grafana.app/" + version +
+			"/namespaces/default/dashboards/" + url.PathEscape(uid)
+		var raw json.RawMessage
+		if err := c.doJSON(ctx, path, &raw); err != nil {
+			lastErr = err
+			if !dashboardFallbackStatus(err) {
+				return nil, fmt.Errorf("getting dashboard %s: %w", version, err)
+			}
+			continue
+		}
+		dashboard, err := dashboardFromResource(raw)
+		if err == nil {
+			return dashboard, nil
+		}
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("getting dashboard through dashboard.grafana.app: %w", lastErr)
+}
+
+func dashboardFallbackStatus(err error) bool {
+	var statusErr *apiError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	return statusErr.StatusCode == http.StatusBadRequest ||
+		statusErr.StatusCode == http.StatusNotFound ||
+		statusErr.StatusCode == http.StatusMethodNotAllowed
+}
+
+func dashboardFromResource(raw json.RawMessage) (*Dashboard, error) {
+	var resource dashboardV2Resource
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, fmt.Errorf("decoding dashboard resource: %w", err)
+	}
+	if len(resource.Spec.Elements) > 0 || resource.Spec.Layout.Kind != "" {
+		return resource.Spec.classicDashboard()
+	}
+
+	var classic dashboardResponse
+	if err := json.Unmarshal(raw, &classic); err != nil {
+		return nil, fmt.Errorf("decoding classic dashboard resource: %w", err)
+	}
+	if classic.Dashboard.Title != "" || classic.Dashboard.Panels != nil {
+		return &classic.Dashboard, nil
+	}
+	var direct struct {
+		Spec Dashboard `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &direct); err != nil {
+		return nil, fmt.Errorf("decoding direct dashboard resource: %w", err)
+	}
+
+	return &direct.Spec, nil
+}
+
+func (spec dashboardV2Spec) classicDashboard() (*Dashboard, error) {
+	panels, err := spec.panels()
+	if err != nil {
+		return nil, err
+	}
+	variables, err := spec.classicVariables()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Dashboard{
+		Title:      spec.Title,
+		Panels:     panels,
+		Templating: Templating{List: variables},
+		Time:       DashboardTime{From: spec.TimeSettings.From, To: spec.TimeSettings.To},
+		Refresh:    spec.TimeSettings.AutoRefresh,
+	}, nil
+}
+
+func (spec dashboardV2Spec) panels() ([]Panel, error) {
+	return spec.Layout.panels(spec.Elements)
+}
+
+func (layout dashboardV2Layout) panels(elements map[string]dashboardV2Element) ([]Panel, error) {
+	switch layout.Kind {
+	case "GridLayout":
+		return layout.gridPanels(elements, 0)
+	case "RowsLayout":
+		return layout.rowsPanels(elements)
+	default:
+		return nil, fmt.Errorf("%w: %s", errUnsupportedV2Layout, layout.Kind)
+	}
+}
+
+func (layout dashboardV2Layout) gridPanels(
+	elements map[string]dashboardV2Element,
+	yOffset int,
+) ([]Panel, error) {
+	panels := make([]Panel, 0, len(layout.Spec.Items))
+	for index, item := range layout.Spec.Items {
+		elementName := item.Spec.Element.Name
+		element, ok := elements[elementName]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", errV2ElementNotFound, elementName)
+		}
+		if element.Kind != "Panel" {
+			return nil, fmt.Errorf("%w: %s", errUnsupportedV2Element, element.Kind)
+		}
+		panel := Panel{
+			ID:    index + 1,
+			Type:  element.Spec.VizConfig.Group,
+			Title: element.Spec.Title,
+			GridPos: GridPos{
+				H: item.Spec.Height,
+				W: item.Spec.Width,
+				X: item.Spec.X,
+				Y: item.Spec.Y + yOffset,
+			},
+			FieldConfig: element.Spec.VizConfig.Spec.FieldConfig,
+			Options:     element.Spec.VizConfig.Spec.Options,
+			Targets:     nil, Datasource: nil, Panels: nil, Transformations: nil,
+			Repeat: "", RepeatDirection: "", MaxPerRow: 0,
+		}
+		if element.Spec.ID != 0 {
+			panel.ID = element.Spec.ID
+		}
+		if item.Spec.Repeat != nil {
+			panel.Repeat = item.Spec.Repeat.Value
+			panel.RepeatDirection = item.Spec.Repeat.Direction
+			panel.MaxPerRow = item.Spec.Repeat.MaxPerRow
+		}
+		if err := setV2PanelData(&panel, element); err != nil {
+			return nil, err
+		}
+		panels = append(panels, panel)
+	}
+
+	return panels, nil
+}
+
+func (layout dashboardV2Layout) rowsPanels(
+	elements map[string]dashboardV2Element,
+) ([]Panel, error) {
+	panels := make([]Panel, 0)
+	yOffset := 0
+	for _, row := range layout.Spec.Rows {
+		if row.Kind != "RowsLayoutRow" {
+			return nil, fmt.Errorf("%w: %s", errUnsupportedV2Layout, row.Kind)
+		}
+		if row.Spec.Layout.Kind != "GridLayout" {
+			return nil, fmt.Errorf("%w: nested %s", errUnsupportedV2Layout, row.Spec.Layout.Kind)
+		}
+		rowPanels, err := row.Spec.Layout.gridPanels(elements, yOffset)
+		if err != nil {
+			return nil, err
+		}
+		panels = append(panels, rowPanels...)
+		yOffset += gridRowsHeight(row.Spec.Layout)
+	}
+
+	return panels, nil
+}
+
+func gridRowsHeight(layout dashboardV2Layout) int {
+	height := 1
+	for _, item := range layout.Spec.Items {
+		height = max(height, item.Spec.Y+item.Spec.Height)
+	}
+
+	return height + 1
+}
+
+func dashboardRefID(index int) string {
+	identifier := ""
+	for {
+		identifier = string(rune('A'+index%26)) + identifier
+		if index < 26 {
+			break
+		}
+		index = index/26 - 1
+	}
+
+	return identifier
+}
+
+func classicV2Target(query dashboardV2Query, index int) (Target, error) {
+	datasource := &DatasourceRef{UID: "", Type: query.Spec.Query.Group}
+	if query.Spec.Query.Datasource != nil {
+		datasource.UID = query.Spec.Query.Datasource.Name
+	}
+	var targetMap map[string]any
+	if err := json.Unmarshal(query.Spec.Query.Spec, &targetMap); err != nil {
+		return Target{}, fmt.Errorf("%w: %s: %w", errInvalidV2Query, query.Spec.RefID, err)
+	}
+	if targetMap == nil {
+		return Target{}, fmt.Errorf("%w: %s is null", errInvalidV2Query, query.Spec.RefID)
+	}
+	refID := query.Spec.RefID
+	if refID == "" {
+		refID = dashboardRefID(index)
+	}
+	targetMap["refId"] = refID
+	if query.Spec.Hidden {
+		targetMap["hide"] = true
+	}
+	targetMap["datasource"] = datasource
+	raw, err := json.Marshal(targetMap)
+	if err != nil {
+		return Target{}, fmt.Errorf("encoding v2 query %q: %w", query.Spec.RefID, err)
+	}
+
+	return Target{RefID: refID, Datasource: datasource, raw: raw}, nil
+}
+
+func setV2PanelData(panel *Panel, element dashboardV2Element) error {
+	for index, query := range element.Spec.Data.Spec.Queries {
+		target, err := classicV2Target(query, index)
+		if err != nil {
+			return err
+		}
+		if panel.Datasource == nil {
+			panel.Datasource = target.Datasource
+		}
+		panel.Targets = append(panel.Targets, target)
+	}
+	for _, transformation := range element.Spec.Data.Spec.Transformations {
+		if transformation.Spec.Disabled {
+			continue
+		}
+		panel.Transformations = append(panel.Transformations, Transformation{
+			ID: transformation.Group, Options: transformation.Spec.Options,
+		})
+	}
+
+	return nil
+}
