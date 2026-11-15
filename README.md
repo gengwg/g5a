@@ -9,7 +9,7 @@
 The name is a numeronym for **Grafana**: `g + 5 letters + a`, in the same style as `k8s` and `o11y`.
 
 ![Public Grafana Play dashboard browser](docs/images/public-dashboard-list.png)
-![Public Grafana Play dashboard grid](docs/images/public-dashboard-grid.png)
+![Public synthetic service health dashboard](docs/images/public-demo-grid.png)
 
 Screenshots use Grafana Play’s public demo data, not private company dashboards.
 

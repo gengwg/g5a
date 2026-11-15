@@ -68,6 +68,9 @@ func (r *timeSeriesRenderer) Render(
 		chartWidth = max(width*2/3, 20)
 		chartHeight = height
 	}
+	if chartHeight < 3 {
+		return renderTinyTimeSeries(seriesData, seriesNames, width, height)
+	}
 
 	chart := timeserieslinechart.New(chartWidth, chartHeight,
 		timeserieslinechart.WithXLabelFormatter(smartTimeLabelFormatter(seriesData)),
@@ -365,6 +368,77 @@ func legendCalculationValues(entry timeSeriesEntry, calculations []string) strin
 	}
 
 	return "  " + strings.Join(values, "  ")
+}
+
+func renderTinyTimeSeries(
+	seriesData map[string]timeSeriesEntry,
+	seriesNames []string,
+	width int,
+	height int,
+) string {
+	if len(seriesNames) == 0 || width <= 0 || height <= 0 {
+		return ""
+	}
+	entry := seriesData[seriesNames[0]]
+	values := make([]float64, 0, len(entry.values))
+	for _, value := range entry.values {
+		if !math.IsNaN(value) && !math.IsInf(value, 0) {
+			values = append(values, value)
+		}
+	}
+	if len(values) == 0 {
+		return "no time series data"
+	}
+
+	last := values[len(values)-1]
+	valueText := presentField(entry.fieldConfig, entry.field, last).Text
+	chartWidth := max(width-len(valueText)-2, 1)
+	chart := sparkline(values, chartWidth)
+	line := truncateTableText(chart+" "+valueText, width)
+	if height > 1 {
+		line += "\n" + truncateTableText(seriesNames[0], width)
+	}
+
+	return line
+}
+
+func sparkline(values []float64, width int) string {
+	if width <= 0 || len(values) == 0 {
+		return ""
+	}
+	points := make([]float64, width)
+	for index := range points {
+		start := index * len(values) / width
+		end := (index + 1) * len(values) / width
+		if end <= start {
+			end = start + 1
+		}
+		minValue, maxValue := values[start], values[start]
+		for _, value := range values[start:end] {
+			minValue = min(minValue, value)
+			maxValue = max(maxValue, value)
+		}
+		points[index] = (minValue + maxValue) / 2
+	}
+
+	minPoint, maxPoint := points[0], points[0]
+	for _, point := range points {
+		minPoint = min(minPoint, point)
+		maxPoint = max(maxPoint, point)
+	}
+	levels := []rune("▁▂▃▄▅▆▇█")
+	result := make([]rune, len(points))
+	for index, point := range points {
+		var level int
+		if maxPoint > minPoint {
+			level = int((point - minPoint) / (maxPoint - minPoint) * float64(len(levels)-1))
+		} else {
+			level = len(levels) / 2
+		}
+		result[index] = levels[level]
+	}
+
+	return string(result)
 }
 
 //nolint:cyclop // calculation labels follow Grafana reducer names
