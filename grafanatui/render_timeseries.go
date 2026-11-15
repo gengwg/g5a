@@ -1,9 +1,10 @@
 package grafanatui
 
 import (
+	"encoding/json"
 	"fmt"
-	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,14 @@ const legendLines = 2
 // timeSeriesRenderer renders time series data as a braille line chart.
 type timeSeriesRenderer struct{}
 
+type timeSeriesOptions struct {
+	Legend struct {
+		Calcs       []string `json:"calcs"`
+		Placement   string   `json:"placement"`
+		DisplayMode string   `json:"displayMode"`
+	} `json:"legend"`
+}
+
 func (r *timeSeriesRenderer) Render(
 	result *grafana.QueryResult,
 	panel grafana.Panel,
@@ -29,35 +38,19 @@ func (r *timeSeriesRenderer) Render(
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-
-	// Recover from panics in the charting library.
 	defer func() {
-		if r := recover(); r != nil {
+		if recovered := recover(); recovered != nil {
 			rendered = lipgloss.Place(
 				width, height,
 				lipgloss.Center, lipgloss.Center,
-				fmt.Sprintf("chart rendering error: %v", r),
+				fmt.Sprintf("chart rendering error: %v", recovered),
 			)
 		}
 	}()
 
-	seriesData := collectTimeSeries(result)
+	seriesData := collectTimeSeries(result, panel.FieldConfig)
 	filterHiddenSeries(seriesData, hiddenSeries)
-
-	slog.Debug("render panel series count", "panel", panel.Title, "series", len(seriesData))
-	for name, entry := range seriesData {
-		nonNaN := 0
-		for _, v := range entry.values {
-			if !math.IsNaN(v) {
-				nonNaN++
-			}
-		}
-		slog.Debug("render series", "name", name, "points", len(entry.timestamps), "non_nan", nonNaN)
-	}
-
 	if len(seriesData) == 0 {
-		slog.Debug("render panel no series data", "panel", panel.Title)
-
 		return lipgloss.Place(
 			width, height,
 			lipgloss.Center, lipgloss.Center,
@@ -65,127 +58,138 @@ func (r *timeSeriesRenderer) Render(
 		)
 	}
 
-	chartHeight := max(height-legendLines, 3) //nolint:mnd // minimum chart height
-
-	unit := ExtractUnit(panel.FieldConfig)
-	chart := timeserieslinechart.New(width, chartHeight,
-		timeserieslinechart.WithXLabelFormatter(smartTimeLabelFormatter(seriesData)),
-		timeserieslinechart.WithYLabelFormatter(unitLabelFormatter(unit)),
-	)
-
+	var options timeSeriesOptions
+	_ = json.Unmarshal(panel.Options, &options)
 	seriesNames := sortedSeriesNames(seriesData)
-
-	pointCount := pushTimeSeriesData(&chart, seriesData, seriesNames)
-	slog.Debug("render panel pushed points", "panel", panel.Title, "points", pointCount)
-
-	if pointCount == 0 {
-		return lipgloss.Place(
-			width, height,
-			lipgloss.Center, lipgloss.Center,
-			"no time series data",
-		)
+	rightLegend := options.Legend.Placement == directionRight && width >= 50
+	chartWidth := width
+	chartHeight := max(height-legendLines, 1)
+	if rightLegend {
+		chartWidth = max(width*2/3, 20)
+		chartHeight = height
 	}
 
+	chart := timeserieslinechart.New(chartWidth, chartHeight,
+		timeserieslinechart.WithXLabelFormatter(smartTimeLabelFormatter(seriesData)),
+		timeserieslinechart.WithYLabelFormatter(unitLabelFormatter(ExtractUnit(panel.FieldConfig))),
+	)
+	pointCount := pushTimeSeriesData(&chart, seriesData, seriesNames)
+	if pointCount == 0 {
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, "no time series data")
+	}
 	styleTimeSeriesDataSets(&chart, seriesNames)
-
 	chart.DrawBrailleAll()
 
-	legend := buildLegend(seriesNames, width)
+	if rightLegend {
+		legend := buildCalculatedLegend(
+			seriesNames,
+			seriesData,
+			width-chartWidth,
+			height,
+			options.Legend.Calcs,
+		)
+		return lipgloss.JoinHorizontal(0, chart.View(), legend)
+	}
+
+	legend := buildLegendWithCalculations(
+		seriesNames,
+		seriesData,
+		width,
+		options.Legend.Calcs,
+	)
 
 	return chart.View() + "\n" + legend
 }
 
-// smartTimeLabelFormatter returns a label formatter that shows hours
-// for ranges <= 24h and date+time for longer ranges.
+// smartTimeLabelFormatter shows hours for short ranges and dates for long ranges.
 func smartTimeLabelFormatter(
 	seriesData map[string]timeSeriesEntry,
 ) linechart.LabelFormatter {
 	rangeMs := timeRangeMs(seriesData)
-	dayMs := int64(24 * 60 * 60 * 1000) //nolint:mnd // 24 hours in ms
-
+	dayMs := int64(24 * 60 * 60 * 1000)
 	if rangeMs <= dayMs {
-		return func(_ int, v float64) string {
-			t := time.Unix(int64(v), 0).In(time.Local) //nolint:gosmopolitan // TUI shows user-local time
-
-			return t.Format("15:04")
+		return func(_ int, value float64) string {
+			return time.Unix(int64(value), 0).In(time.Local).Format("15:04") //nolint:gosmopolitan // user-local dashboard time
 		}
 	}
 
-	return func(_ int, v float64) string {
-		t := time.Unix(int64(v), 0).In(time.Local) //nolint:gosmopolitan // TUI shows user-local time
-
-		return t.Format("Jan 02 15:04")
+	return func(_ int, value float64) string {
+		//nolint:gosmopolitan // user-local dashboard time
+		return time.Unix(int64(value), 0).In(time.Local).Format("Jan 02 15:04")
 	}
 }
 
-// timeRangeMs computes the total time span across all series.
 func timeRangeMs(seriesData map[string]timeSeriesEntry) int64 {
-	var minTs, maxTs int64
-
+	var minTimestamp, maxTimestamp int64
 	first := true
-
 	for _, entry := range seriesData {
 		if len(entry.timestamps) == 0 {
 			continue
 		}
-
-		lo := entry.timestamps[0]
-		hi := entry.timestamps[len(entry.timestamps)-1]
-
-		if first || lo < minTs {
-			minTs = lo
+		low := entry.timestamps[0]
+		high := entry.timestamps[len(entry.timestamps)-1]
+		if first || low < minTimestamp {
+			minTimestamp = low
 		}
-
-		if first || hi > maxTs {
-			maxTs = hi
+		if first || high > maxTimestamp {
+			maxTimestamp = high
 		}
-
 		first = false
 	}
 
-	return maxTs - minTs
+	return maxTimestamp - minTimestamp
 }
 
-// unitLabelFormatter returns a Y axis label formatter that uses the
-// panel's configured Grafana unit.
 func unitLabelFormatter(unit string) linechart.LabelFormatter {
-	return func(_ int, v float64) string {
+	return func(_ int, value float64) string {
 		if unit != "" {
-			return FormatValue(v, unit)
+			return FormatValue(value, unit)
 		}
 
-		return fmt.Sprintf("%.2g", v)
+		return fmt.Sprintf("%.2g", value)
 	}
 }
 
-// timeSeriesEntry holds timestamps and values for a single series.
+// timeSeriesEntry holds timestamps, values, and presentation for one series.
 type timeSeriesEntry struct {
-	timestamps []int64
-	values     []float64
+	timestamps  []int64
+	values      []float64
+	field       grafana.DataFrameField
+	fieldConfig json.RawMessage
 }
 
-// collectTimeSeries gathers all time series from a query result.
-// Series where every value is NaN are excluded.
 func collectTimeSeries(
 	result *grafana.QueryResult,
+	fieldConfig json.RawMessage,
 ) map[string]timeSeriesEntry {
 	seriesData := make(map[string]timeSeriesEntry)
+	refIDs := make([]string, 0, len(result.Results))
+	for refID := range result.Results {
+		refIDs = append(refIDs, refID)
+	}
+	slices.Sort(refIDs)
 
-	for _, resultData := range result.Results {
-		for _, frame := range resultData.Frames {
+	for _, refID := range refIDs {
+		for _, frame := range result.Results[refID].Frames {
 			timestamps, series, err := frame.TimeSeries()
 			if err != nil {
 				continue
 			}
-
-			for name, values := range series {
-				if allNaN(values) {
+			for _, field := range frame.Schema.Fields {
+				if field.Type != fieldTypeNumber {
 					continue
 				}
-
+				name := presentField(fieldConfig, field, nil).DisplayName
+				values, ok := series[formatFrameFieldKey(field)]
+				if !ok || allNaN(values) {
+					continue
+				}
+				name = uniqueSeriesName(seriesData, name, refID)
 				seriesData[name] = timeSeriesEntry{
-					timestamps: timestamps,
-					values:     values,
+					timestamps:  timestamps,
+					values:      values,
+					field:       field,
+					fieldConfig: fieldConfig,
 				}
 			}
 		}
@@ -194,10 +198,47 @@ func collectTimeSeries(
 	return seriesData
 }
 
-// allNaN returns true if every value in the slice is NaN.
+// formatFrameFieldKey mirrors DataFrame.TimeSeries's label-aware key format.
+func formatFrameFieldKey(field grafana.DataFrameField) string {
+	if len(field.Labels) == 0 {
+		return field.Name
+	}
+	keys := make([]string, 0, len(field.Labels))
+	for key := range field.Labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, key+"="+field.Labels[key])
+	}
+
+	return field.Name + "{" + strings.Join(pairs, ",") + "}"
+}
+
+func uniqueSeriesName(
+	seriesData map[string]timeSeriesEntry,
+	name string,
+	refID string,
+) string {
+	if _, exists := seriesData[name]; !exists {
+		return name
+	}
+	candidate := name + " #" + refID
+	if _, exists := seriesData[candidate]; !exists {
+		return candidate
+	}
+	for suffix := 2; ; suffix++ {
+		candidate = fmt.Sprintf("%s #%s-%d", name, refID, suffix)
+		if _, exists := seriesData[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
 func allNaN(values []float64) bool {
-	for _, v := range values {
-		if !math.IsNaN(v) {
+	for _, value := range values {
+		if !math.IsNaN(value) {
 			return false
 		}
 	}
@@ -205,7 +246,6 @@ func allNaN(values []float64) bool {
 	return true
 }
 
-// filterHiddenSeries removes hidden series from the data map.
 func filterHiddenSeries(
 	seriesData map[string]timeSeriesEntry,
 	hidden map[string]bool,
@@ -217,44 +257,33 @@ func filterHiddenSeries(
 	}
 }
 
-// sortedSeriesNames returns series names in sorted order for
-// deterministic rendering.
-func sortedSeriesNames(
-	seriesData map[string]timeSeriesEntry,
-) []string {
+func sortedSeriesNames(seriesData map[string]timeSeriesEntry) []string {
 	names := make([]string, 0, len(seriesData))
 	for name := range seriesData {
 		names = append(names, name)
 	}
-
 	sort.Strings(names)
 
 	return names
 }
 
-// pushTimeSeriesData pushes all data points into the chart model
-// and returns the total number of points pushed.
 func pushTimeSeriesData(
 	chart *timeserieslinechart.Model,
 	seriesData map[string]timeSeriesEntry,
 	seriesNames []string,
 ) int {
 	count := 0
-
 	for _, name := range seriesNames {
 		entry := seriesData[name]
-
-		for i, ts := range entry.timestamps {
-			value := entry.values[i]
-			if math.IsNaN(value) {
+		pointCount := min(len(entry.timestamps), len(entry.values))
+		for index := range pointCount {
+			if math.IsNaN(entry.values[index]) {
 				continue
 			}
-
 			chart.PushDataSet(name, timeserieslinechart.TimePoint{
-				Time:  time.UnixMilli(ts),
-				Value: value,
+				Time:  time.UnixMilli(entry.timestamps[index]),
+				Value: entry.values[index],
 			})
-
 			count++
 		}
 	}
@@ -262,35 +291,129 @@ func pushTimeSeriesData(
 	return count
 }
 
-// styleTimeSeriesDataSets applies distinct colors and line styles to
-// each dataset.
 func styleTimeSeriesDataSets(
 	chart *timeserieslinechart.Model,
 	seriesNames []string,
 ) {
-	for i, name := range seriesNames {
-		color := chartColor(i)
-		style := lipgloss.NewStyle().Foreground(color)
-
+	for index, name := range seriesNames {
+		style := lipgloss.NewStyle().Foreground(chartColor(index))
 		chart.SetDataSetStyle(name, style)
 		chart.SetDataSetLineStyle(name, runes.ThinLineStyle)
 	}
 }
 
-// buildLegend renders a colored legend line for the given series.
-func buildLegend(seriesNames []string, maxWidth int) string {
+func buildLegendWithCalculations(
+	seriesNames []string,
+	seriesData map[string]timeSeriesEntry,
+	maxWidth int,
+	calculations []string,
+) string {
 	parts := make([]string, 0, len(seriesNames))
-
-	for i, name := range seriesNames {
-		color := chartColor(i)
-		style := lipgloss.NewStyle().Foreground(color)
-		parts = append(parts, style.Render("■ "+name))
+	for index, name := range seriesNames {
+		style := lipgloss.NewStyle().Foreground(chartColor(index))
+		text := "■ " + name + legendCalculations(seriesData[name], calculations)
+		parts = append(parts, style.Render(text))
 	}
 
-	legend := strings.Join(parts, "  ")
-	if lipgloss.Width(legend) > maxWidth && maxWidth > 0 {
-		legend = lipgloss.NewStyle().MaxWidth(maxWidth).Render(legend)
+	return lipgloss.NewStyle().MaxWidth(maxWidth).Render(strings.Join(parts, "  "))
+}
+
+func buildCalculatedLegend(
+	seriesNames []string,
+	seriesData map[string]timeSeriesEntry,
+	width int,
+	height int,
+	calculations []string,
+) string {
+	lines := make([]string, 0, height)
+	if len(calculations) > 0 {
+		labels := make([]string, 0, len(calculations))
+		for _, calculation := range calculations {
+			labels = append(labels, legendCalculationLabel(calculation))
+		}
+		lines = append(lines, truncateTableText("Name  "+strings.Join(labels, "  "), width))
+	}
+	for index, name := range seriesNames {
+		if len(lines) >= height {
+			break
+		}
+		style := lipgloss.NewStyle().Foreground(chartColor(index))
+		text := "■ " + name + legendCalculationValues(seriesData[name], calculations)
+		lines = append(lines, style.Render(truncateTableText(text, max(width-1, 1))))
 	}
 
-	return legend
+	return lipgloss.NewStyle().Width(width).Height(height).Render(strings.Join(lines, "\n"))
+}
+
+func legendCalculationValues(entry timeSeriesEntry, calculations []string) string {
+	values := make([]string, 0, len(calculations))
+	for _, calculation := range calculations {
+		if !supportedStatCalculation(calculation) {
+			values = append(values, "unsupported")
+			continue
+		}
+		value := reduceStatColumn(entry.values, []string{calculation})
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			values = append(values, "-")
+			continue
+		}
+		presentation := presentField(entry.fieldConfig, entry.field, value)
+		values = append(values, presentation.Text)
+	}
+	if len(values) == 0 {
+		return ""
+	}
+
+	return "  " + strings.Join(values, "  ")
+}
+
+//nolint:cyclop // calculation labels follow Grafana reducer names
+func legendCalculationLabel(calculation string) string {
+	switch calculation {
+	case "lastNotNull":
+		return "Last*"
+	case "firstNotNull":
+		return "First*"
+	case calcLast:
+		return "Last"
+	case calcFirst:
+		return "First"
+	case calcMin:
+		return "Min"
+	case calcMax:
+		return "Max"
+	case calcMean:
+		return "Mean"
+	case calcSum:
+		return "Sum"
+	case calcCount:
+		return "Count"
+	default:
+		return calculation
+	}
+}
+
+func legendCalculations(entry timeSeriesEntry, calculations []string) string {
+	if len(calculations) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(calculations))
+	for _, calculation := range calculations {
+		if !supportedStatCalculation(calculation) {
+			parts = append(parts, calculation+"=unsupported")
+			continue
+		}
+
+		value := reduceStatColumn(entry.values, []string{calculation})
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		presentation := presentField(entry.fieldConfig, entry.field, value)
+		parts = append(parts, legendCalculationLabel(calculation)+"="+presentation.Text)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "  " + strings.Join(parts, " ")
 }

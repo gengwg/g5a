@@ -1,8 +1,13 @@
 package grafana_test
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/lovromazgon/grafana-tui/grafana"
@@ -115,4 +120,67 @@ func TestClient_URLConstruction(t *testing.T) {
 	if gotPath != expected {
 		t.Errorf("path = %q, want %q", gotPath, expected)
 	}
+}
+
+//nolint:paralleltest // replaces the process-wide logger to assert redaction
+func TestClient_APIErrorDoesNotExposeResponseBody(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"private datasource URL"}`))
+		},
+	))
+	defer server.Close()
+
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err == nil {
+		t.Fatal("expected an API error")
+	}
+	if strings.Contains(err.Error(), "private datasource URL") {
+		t.Fatalf("error exposed response body: %v", err)
+	}
+	if strings.Contains(logs.String(), "private datasource URL") {
+		t.Fatalf("logs exposed response body: %s", logs.String())
+	}
+}
+
+func TestClient_TransportErrorDoesNotExposeUserinfo(t *testing.T) {
+	t.Parallel()
+
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, &url.Error{
+			Op:  "Get",
+			URL: request.URL.String(),
+			Err: errors.New("dial failed"),
+		}
+	})
+	client, err := grafana.NewClient(
+		"http://user:secret@example.com",
+		grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "user") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error exposed URL userinfo: %v", err)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }

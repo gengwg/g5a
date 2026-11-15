@@ -2,6 +2,37 @@ package grafanatui
 
 import "github.com/charmbracelet/lipgloss"
 
+const (
+	colorWhite      = "#FFFFFF"
+	colorBlack      = "#000000"
+	colorLightText  = "#333333"
+	colorDarkText   = "#EEEEEE"
+	colorLightMuted = "#999999"
+	colorDarkMuted  = "#777777"
+	colorDarkBorder = "#555555"
+
+	fieldTypeNumber  = "number"
+	fieldTypeTime    = "time"
+	directionLeft    = "left"
+	directionRight   = "right"
+	alignCenter      = "center"
+	calcMin          = "min"
+	calcMax          = "max"
+	calcMean         = "mean"
+	calcFirst        = "first"
+	calcFirstNotNull = "firstNotNull"
+	calcLast         = "last"
+	calcLastNotNull  = "lastNotNull"
+	calcSum          = "sum"
+	calcCount        = "count"
+	timeNow          = "now"
+	timeFifteenMins  = "now-15m"
+	defaultTimeFrom  = "now-1h"
+	panelTypeStat    = "stat"
+	mappingTypeValue = "value"
+	fieldNameValue   = "Value"
+)
+
 // chartColors defines a shared color palette for chart rendering.
 var chartColors = []lipgloss.Color{ //nolint:gochecknoglobals // read-only palette
 	lipgloss.Color("#00FFFF"), // cyan

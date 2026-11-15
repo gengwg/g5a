@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lovromazgon/grafana-tui/grafana"
+	"github.com/lovromazgon/grafana-tui/grafanatui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -136,6 +137,7 @@ func setupGrafana(t *testing.T) *grafana.Client {
 	waitForPrometheusData(t, promContainer, ctx)
 
 	datasourceUID := createPrometheusDatasource(t, baseURL)
+	waitForDatasourceHealth(t, baseURL, datasourceUID)
 	createTestDashboard(t, baseURL, datasourceUID)
 
 	return client
@@ -244,8 +246,39 @@ func createPrometheusDatasource(t *testing.T, baseURL string) string {
 	return result.Datasource.UID
 }
 
-// createTestDashboard creates a dashboard with three panels
-// (timeseries, stat, table) that use the Prometheus datasource.
+func waitForDatasourceHealth(t *testing.T, baseURL, datasourceUID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		request, err := http.NewRequestWithContext(
+			t.Context(),
+			http.MethodGet,
+			baseURL+"/api/datasources/uid/"+datasourceUID+"/health",
+			nil,
+		)
+		require.NoError(t, err)
+		request.SetBasicAuth(grafanaUser, grafanaPassword)
+
+		response, err := http.DefaultClient.Do(request)
+		if err == nil {
+			var health struct {
+				Status string `json:"status"`
+			}
+			decodeErr := json.NewDecoder(response.Body).Decode(&health)
+			_ = response.Body.Close()
+			if decodeErr == nil && response.StatusCode == http.StatusOK && health.Status == "OK" {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	t.Fatal("timed out waiting for the Prometheus datasource to become healthy")
+}
+
+// createTestDashboard creates timeseries, stat, joined-table, and repeated-stat
+// panels with datasource, query_result, and custom variables.
 func createTestDashboard(t *testing.T, baseURL, datasourceUID string) {
 	t.Helper()
 
@@ -257,6 +290,29 @@ func createTestDashboard(t *testing.T, baseURL, datasourceUID string) {
 	dashboard := map[string]any{
 		"dashboard": map[string]any{
 			"title": "Integration Test Dashboard",
+			"uid":   "integration-test",
+			"time":  map[string]string{"from": "now-1h", "to": "now"},
+			"templating": map[string]any{
+				"list": []map[string]any{
+					{
+						"name": "datasource", "type": "datasource", "query": "prometheus",
+						"current": map[string]any{"text": "Prometheus", "value": datasourceUID},
+					},
+					{
+						"name": "job", "type": "query", "multi": true, "includeAll": true, "sort": 1,
+						"datasource": dsRef,
+						"query": map[string]any{
+							"query": "query_result(count by (job) (up))", "refId": "vars",
+						},
+						"regex":   `/job="([^"]+)"/`,
+						"current": map[string]any{"text": "All", "value": "$__all"},
+					},
+					{
+						"name": "cluster", "type": "custom", "query": "alpha,beta,gamma", "multi": true, "includeAll": true,
+						"current": map[string]any{"text": "All", "value": "$__all"},
+					},
+				},
+			},
 			"panels": []map[string]any{
 				{
 					"id":         1,
@@ -287,18 +343,68 @@ func createTestDashboard(t *testing.T, baseURL, datasourceUID string) {
 					},
 				},
 				{
-					"id":         3,
-					"type":       "table",
-					"title":      "Table Panel",
-					"datasource": dsRef,
-					"targets": []map[string]any{{
-						"refId":      "A",
-						"datasource": dsRef,
-						"expr":       "prometheus_build_info",
-					}},
-					"gridPos": map[string]int{
-						"h": 8, "w": 12, "x": 12, "y": 0,
+					"id": 3, "type": "table", "title": "Joined Table Panel", "datasource": dsRef,
+					"targets": []map[string]any{
+						{
+							"refId": "A", "datasource": dsRef, "expr": "prometheus_build_info * 1",
+							"instant": true, "range": false, "format": "table",
+						},
+						{
+							"refId": "B", "datasource": dsRef, "expr": "up * 1",
+							"instant": true, "range": false, "format": "table",
+						},
 					},
+					"transformations": []map[string]any{
+						{"id": "joinByField", "options": map[string]any{"byField": "job", "mode": "outer"}},
+						{"id": "filterFieldsByName", "options": map[string]any{
+							"include": map[string]string{"pattern": "^(job|Value #.*)$"},
+						}},
+						{"id": "organize", "options": map[string]any{
+							"excludeByName": map[string]bool{},
+							"indexByName":   map[string]int{"job": 0, "Value #A": 1, "Value #B": 2},
+							"renameByName":  map[string]string{"Value #A": "build_info", "Value #B": "up"},
+						}},
+					},
+					"fieldConfig": map[string]any{
+						"defaults": map[string]any{"noValue": "-"},
+						"overrides": []map[string]any{{
+							"matcher": map[string]string{"id": "byName", "options": "up"},
+							"properties": []map[string]any{
+								{"id": "mappings", "value": []map[string]any{{
+									"type": "value", "options": map[string]any{
+										"1": map[string]string{"text": "UP", "color": "green"},
+									},
+								}}},
+								{"id": "custom.cellOptions", "value": map[string]string{"type": "color-background", "mode": "basic"}},
+							},
+						}},
+					},
+					"options": map[string]any{"showHeader": true},
+					"gridPos": map[string]int{"h": 8, "w": 12, "x": 12, "y": 0},
+				},
+				{
+					"id": 4, "type": "stat", "title": "$cluster", "repeat": "cluster", "repeatDirection": "h", "maxPerRow": 2,
+					"datasource": map[string]string{"type": "prometheus", "uid": "${datasource}"},
+					"targets": []map[string]any{{
+						"refId": "A", "datasource": dsRef,
+						"expr":    `label_replace(up, "cluster", "$cluster", "job", "prometheus")`,
+						"instant": true, "range": false,
+					}},
+					"fieldConfig": map[string]any{
+						"defaults": map[string]any{
+							"displayName": "${__field.labels.cluster}",
+							"mappings": []map[string]any{{
+								"type": "value", "options": map[string]any{
+									"1": map[string]string{"text": "OK", "color": "green"},
+								},
+							}},
+						},
+					},
+					"options": map[string]any{
+						"colorMode": "background", "textMode": "value_and_name",
+						"reduceOptions": map[string]any{"calcs": []string{"lastNotNull"}},
+					},
+					"gridPos": map[string]int{"h": 4, "w": 24, "x": 0, "y": 12},
 				},
 			},
 		},
@@ -364,7 +470,7 @@ func TestIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "Integration Test Dashboard", dashboard.Title)
-		assert.Len(t, dashboard.Panels, 3)
+		assert.Len(t, dashboard.Panels, 4)
 	})
 
 	t.Run("QueryPanel", func(t *testing.T) {
@@ -383,22 +489,42 @@ func TestIntegration(t *testing.T) {
 		require.NotEmpty(t, panels)
 
 		timeRange := grafana.TimeRange{From: "now-1h", To: "now"}
-		result, err := client.QueryPanel(
-			t.Context(), panels[0], timeRange, 100, nil, nil, panels,
-		)
-		require.NoError(t, err)
+		var result *grafana.QueryResult
+		require.Eventually(t, func() bool {
+			var queryErr error
+			result, queryErr = client.QueryPanel(
+				t.Context(), panels[0], timeRange, 100, nil, nil, panels,
+			)
+			if queryErr != nil {
+				return false
+			}
+			for _, data := range result.Results {
+				for _, frame := range data.Frames {
+					if _, _, tsErr := frame.TimeSeries(); tsErr == nil {
+						return true
+					}
+				}
+			}
+
+			return false
+		}, 30*time.Second, 250*time.Millisecond,
+			"expected a nonempty time-series response from Grafana")
 		require.NotEmpty(t, result.Results)
 
+		checkedFrames := 0
 		for _, data := range result.Results {
-			require.NotEmpty(t, data.Frames)
-
 			for _, frame := range data.Frames {
+				if len(frame.Schema.Fields) == 0 {
+					continue
+				}
 				timestamps, series, tsErr := frame.TimeSeries()
-				require.NoError(t, tsErr)
+				require.NoError(t, tsErr, "frame schema: %+v; data: %+v", frame.Schema, frame.Data)
 				assert.NotEmpty(t, timestamps)
 				assert.NotEmpty(t, series)
+				checkedFrames++
 			}
 		}
+		assert.Positive(t, checkedFrames)
 	})
 
 	t.Run("FullFlow", func(t *testing.T) {
@@ -424,25 +550,56 @@ func TestIntegration(t *testing.T) {
 		)
 		require.NoError(t, err)
 
+		options, selections, err := client.ResolveVariableOptionsWithTimeRange(
+			t.Context(),
+			dashboard.Templating.List,
+			grafana.TimeRange{From: "now-1h", To: "now"},
+		)
+		require.NoError(t, err)
+		assert.Contains(t, options["job"], "prometheus")
+
 		panels := grafana.FlattenPanels(dashboard.Panels)
-		require.Len(t, panels, 3)
+		instances := grafana.ExpandPanels(
+			dashboard.Panels,
+			dashboard.Templating.List,
+			options,
+			selections,
+		)
+		require.Len(t, instances, 6)
 
-		// Query each panel.
-		timeRange := grafana.TimeRange{From: "now-1h", To: "now"}
-
-		for _, panel := range panels {
+		for _, instance := range instances {
 			result, queryErr := client.QueryPanel(
-				t.Context(), panel, timeRange, 80, nil, nil, panels,
+				t.Context(),
+				instance.Panel,
+				grafana.TimeRange{From: "now-1h", To: "now"},
+				80,
+				dashboard.Templating.List,
+				instance.Variables,
+				panels,
 			)
-			require.NoError(t, queryErr,
-				"panel %q query failed", panel.Title)
-			assert.NotEmpty(t, result.Results,
-				"panel %q should return data", panel.Title)
+			require.NoError(t, queryErr, "panel %q query failed", instance.Panel.Title)
+			require.NotEmpty(t, result.Results, "panel %q should return data", instance.Panel.Title)
 
 			for refID, data := range result.Results {
 				assert.NotEmpty(t, data.Frames,
-					"panel %q refID %q should have frames",
-					panel.Title, refID)
+					"panel %q refID %q should have frames", instance.Panel.Title, refID)
+			}
+
+			output := grafanatui.RendererForPanel(instance.Panel.Type).Render(
+				result,
+				instance.Panel,
+				100,
+				20,
+				nil,
+			)
+			switch {
+			case instance.Panel.Repeat == "cluster":
+				assert.Contains(t, output, "OK")
+				assert.Contains(t, output, instance.Panel.Title)
+			case instance.Panel.ID == 3:
+				assert.Contains(t, output, "build_info")
+				assert.Contains(t, output, "up")
+				assert.Contains(t, output, "UP")
 			}
 		}
 	})

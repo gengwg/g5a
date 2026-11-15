@@ -4,10 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
+	"strconv"
 )
 
 // SI magnitude thresholds and suffixes.
 const (
+	grafanaGreen  = "#73BF69"
+	grafanaRed    = "#F2495C"
+	grafanaYellow = "#FADE2A"
+	grafanaOrange = "#FF9830"
+
 	siKilo = 1_000.0
 	siMega = 1_000_000.0
 	siGiga = 1_000_000_000.0
@@ -38,9 +45,9 @@ const (
 	percentMultiplier     = 100.0
 )
 
-// unitFormatters maps Grafana unit strings to their formatting
-// functions.
-var unitFormatters = map[string]func(float64) string{ //nolint:gochecknoglobals // registry is read-only after init
+// unitFormatters maps Grafana unit strings to their formatting functions. A nil
+// decimal count preserves the unit's default precision.
+var unitFormatters = map[string]func(float64, *int) string{ //nolint:gochecknoglobals // read-only registry
 	"short":       formatSI,
 	"":            formatSI,
 	"bytes":       formatBinaryBytes,
@@ -74,6 +81,10 @@ const (
 // FormatValue formats a float64 value according to the given Grafana
 // unit string.
 func FormatValue(value float64, unit string) string {
+	return formatValue(value, unit, nil)
+}
+
+func formatValue(value float64, unit string, decimals *int) string {
 	if math.IsNaN(value) {
 		return "NaN"
 	}
@@ -87,86 +98,99 @@ func FormatValue(value float64, unit string) string {
 	}
 
 	if formatter, ok := unitFormatters[unit]; ok {
-		return formatter(value)
+		return formatter(value, decimals)
 	}
 
-	return formatRawNumber(value)
+	return formatRawNumber(value, decimals)
 }
 
 // formatSI formats a number with SI suffixes (K, M, G, T).
-func formatSI(value float64) string {
+func formatSI(value float64, decimals *int) string {
 	absValue := math.Abs(value)
 
 	switch {
 	case absValue >= siTera:
-		return trimTrailingZeros(value/siTera, "T")
+		return formatUnitNumber(value/siTera, "T", decimals)
 	case absValue >= siGiga:
-		return trimTrailingZeros(value/siGiga, "G")
+		return formatUnitNumber(value/siGiga, "G", decimals)
 	case absValue >= siMega:
-		return trimTrailingZeros(value/siMega, "M")
+		return formatUnitNumber(value/siMega, "M", decimals)
 	case absValue >= siKilo:
-		return trimTrailingZeros(value/siKilo, "K")
+		return formatUnitNumber(value/siKilo, "K", decimals)
 	default:
-		return formatRawNumber(value)
+		return formatRawNumber(value, decimals)
 	}
 }
 
 // formatBinaryBytes formats bytes using binary (IEC) prefixes.
-func formatBinaryBytes(value float64) string {
+func formatBinaryBytes(value float64, decimals *int) string {
 	absValue := math.Abs(value)
 
 	switch {
 	case absValue >= binaryTebi:
-		return trimTrailingZeros(value/binaryTebi, " TiB")
+		return formatUnitNumber(value/binaryTebi, " TiB", decimals)
 	case absValue >= binaryGibi:
-		return trimTrailingZeros(value/binaryGibi, " GiB")
+		return formatUnitNumber(value/binaryGibi, " GiB", decimals)
 	case absValue >= binaryMebi:
-		return trimTrailingZeros(value/binaryMebi, " MiB")
+		return formatUnitNumber(value/binaryMebi, " MiB", decimals)
 	case absValue >= binaryKibi:
-		return trimTrailingZeros(value/binaryKibi, " KiB")
+		return formatUnitNumber(value/binaryKibi, " KiB", decimals)
 	default:
-		return trimTrailingZeros(value, " B")
+		return formatUnitNumber(value, " B", decimals)
 	}
 }
 
 // formatDecimalBytes formats bytes using decimal (SI) prefixes.
-func formatDecimalBytes(value float64) string {
+func formatDecimalBytes(value float64, decimals *int) string {
 	absValue := math.Abs(value)
 
 	switch {
 	case absValue >= decTera:
-		return trimTrailingZeros(value/decTera, " TB")
+		return formatUnitNumber(value/decTera, " TB", decimals)
 	case absValue >= decGiga:
-		return trimTrailingZeros(value/decGiga, " GB")
+		return formatUnitNumber(value/decGiga, " GB", decimals)
 	case absValue >= decMega:
-		return trimTrailingZeros(value/decMega, " MB")
+		return formatUnitNumber(value/decMega, " MB", decimals)
 	case absValue >= decKilo:
-		return trimTrailingZeros(value/decKilo, " KB")
+		return formatUnitNumber(value/decKilo, " KB", decimals)
 	default:
-		return trimTrailingZeros(value, " B")
+		return formatUnitNumber(value, " B", decimals)
 	}
 }
 
 // formatSeconds formats a duration in seconds as a human-readable
 // string using hours, minutes, seconds, and milliseconds.
-func formatSeconds(value float64) string {
+//
+//nolint:cyclop // duration formatting handles several magnitudes and decimal precision
+func formatSeconds(value float64, decimals *int) string {
 	if value < 0 {
-		return "-" + formatSeconds(-value)
+		return "-" + formatSeconds(-value, decimals)
 	}
 
 	if value == 0 {
+		if decimals != nil {
+			return formatUnitNumber(0, "s", decimals)
+		}
+
 		return "0s"
 	}
 
 	if value < 1 {
 		ms := value * millisecondsPerSecond
+		if decimals != nil {
+			return formatUnitNumber(ms, "ms", decimals)
+		}
+
 		return fmt.Sprintf("%.0fms", ms)
 	}
 
 	totalSeconds := int(value)
 	hours := totalSeconds / secondsPerHour
 	minutes := (totalSeconds % secondsPerHour) / secondsPerMinute
-	seconds := totalSeconds % secondsPerMinute
+	seconds := float64(totalSeconds % secondsPerMinute)
+	if decimals != nil {
+		seconds += value - math.Trunc(value)
+	}
 
 	result := ""
 	if hours > 0 {
@@ -178,10 +202,18 @@ func formatSeconds(value float64) string {
 	}
 
 	if seconds > 0 {
-		result += fmt.Sprintf("%ds", seconds)
+		if decimals != nil {
+			result += formatUnitNumber(seconds, "s", decimals)
+		} else {
+			result += fmt.Sprintf("%ds", int(seconds))
+		}
 	}
 
 	if result == "" {
+		if decimals != nil {
+			return formatUnitNumber(0, "s", decimals)
+		}
+
 		return "0s"
 	}
 
@@ -196,80 +228,83 @@ func formatSeconds(value float64) string {
 
 // formatMilliseconds formats a duration in milliseconds as a
 // human-readable string.
-func formatMilliseconds(value float64) string {
+func formatMilliseconds(value float64, decimals *int) string {
 	if value < 0 {
-		return "-" + formatMilliseconds(-value)
+		return "-" + formatMilliseconds(-value, decimals)
 	}
 
 	if value >= millisecondsPerSecond {
-		return trimTrailingZeros(value/millisecondsPerSecond, "s")
+		return formatUnitNumber(value/millisecondsPerSecond, "s", decimals)
+	}
+	if decimals != nil {
+		return formatUnitNumber(value, "ms", decimals)
 	}
 
 	return fmt.Sprintf("%.0fms", value)
 }
 
 // formatPercent formats a value as a percentage.
-func formatPercent(value float64) string {
-	return trimTrailingZeros(value, "%")
+func formatPercent(value float64, decimals *int) string {
+	return formatUnitNumber(value, "%", decimals)
 }
 
 // formatPercentUnit formats a unit-based percentage (0-1 range).
-func formatPercentUnit(value float64) string {
-	return trimTrailingZeros(value*percentMultiplier, "%")
+func formatPercentUnit(value float64, decimals *int) string {
+	return formatUnitNumber(value*percentMultiplier, "%", decimals)
 }
 
 // formatReqPerSec formats a value as requests per second.
-func formatReqPerSec(value float64) string {
-	return formatSI(value) + " req/s"
+func formatReqPerSec(value float64, decimals *int) string {
+	return formatSI(value, decimals) + " req/s"
 }
 
 // formatOpsPerSec formats a value as operations per second.
-func formatOpsPerSec(value float64) string {
-	return formatSI(value) + " ops/s"
+func formatOpsPerSec(value float64, decimals *int) string {
+	return formatSI(value, decimals) + " ops/s"
 }
 
 // formatBytesPerSec formats a rate in bytes per second using decimal prefixes.
-func formatBytesPerSec(value float64) string {
-	return formatDecimalBytes(value) + "/s"
+func formatBytesPerSec(value float64, decimals *int) string {
+	return formatDecimalBytes(value, decimals) + "/s"
 }
 
 // formatBinaryBytesPerSec formats a rate in bytes per second using binary prefixes.
-func formatBinaryBytesPerSec(value float64) string {
-	return formatBinaryBytes(value) + "/s"
+func formatBinaryBytesPerSec(value float64, decimals *int) string {
+	return formatBinaryBytes(value, decimals) + "/s"
 }
 
 // formatDecimalBytesPerSec formats a rate in bytes per second using decimal prefixes.
-func formatDecimalBytesPerSec(value float64) string {
-	return formatDecimalBytes(value) + "/s"
+func formatDecimalBytesPerSec(value float64, decimals *int) string {
+	return formatDecimalBytes(value, decimals) + "/s"
 }
 
 // formatBitsPerSec formats a rate in bits per second.
-func formatBitsPerSec(value float64) string {
-	return formatBits(value) + "/s"
+func formatBitsPerSec(value float64, decimals *int) string {
+	return formatBits(value, decimals) + "/s"
 }
 
 // formatBits formats a value in bits using SI prefixes.
-func formatBits(value float64) string {
+func formatBits(value float64, decimals *int) string {
 	absValue := math.Abs(value)
 
 	switch {
 	case absValue >= siTera:
-		return trimTrailingZeros(value/siTera, " Tb")
+		return formatUnitNumber(value/siTera, " Tb", decimals)
 	case absValue >= siGiga:
-		return trimTrailingZeros(value/siGiga, " Gb")
+		return formatUnitNumber(value/siGiga, " Gb", decimals)
 	case absValue >= siMega:
-		return trimTrailingZeros(value/siMega, " Mb")
+		return formatUnitNumber(value/siMega, " Mb", decimals)
 	case absValue >= siKilo:
-		return trimTrailingZeros(value/siKilo, " Kb")
+		return formatUnitNumber(value/siKilo, " Kb", decimals)
 	default:
-		return trimTrailingZeros(value, " b")
+		return formatUnitNumber(value, " b", decimals)
 	}
 }
 
 // formatNanoseconds formats a duration in nanoseconds.
-func formatNanoseconds(value float64) string {
+func formatNanoseconds(value float64, decimals *int) string {
 	if value < 0 {
-		return "-" + formatNanoseconds(-value)
+		return "-" + formatNanoseconds(-value, decimals)
 	}
 
 	nsPerUs := 1000.0
@@ -278,71 +313,95 @@ func formatNanoseconds(value float64) string {
 
 	switch {
 	case value >= nsPerSec:
-		return formatSeconds(value / nsPerSec)
+		return formatSeconds(value/nsPerSec, decimals)
 	case value >= nsPerMs:
+		if decimals != nil {
+			return formatUnitNumber(value/nsPerMs, "ms", decimals)
+		}
+
 		return fmt.Sprintf("%.0fms", value/nsPerMs)
 	case value >= nsPerUs:
+		if decimals != nil {
+			return formatUnitNumber(value/nsPerUs, "µs", decimals)
+		}
+
 		return fmt.Sprintf("%.0fµs", value/nsPerUs)
 	default:
+		if decimals != nil {
+			return formatUnitNumber(value, "ns", decimals)
+		}
+
 		return fmt.Sprintf("%.0fns", value)
 	}
 }
 
 // formatPacketsPerSec formats a value as packets per second.
-func formatPacketsPerSec(value float64) string {
-	return formatSI(value) + " pps"
+func formatPacketsPerSec(value float64, decimals *int) string {
+	return formatSI(value, decimals) + " pps"
 }
 
 // formatIOPS formats a value as I/O operations per second.
-func formatIOPS(value float64) string {
-	return formatSI(value) + " iops"
+func formatIOPS(value float64, decimals *int) string {
+	return formatSI(value, decimals) + " iops"
 }
 
 // formatHertz formats a value in hertz.
-func formatHertz(value float64) string {
+func formatHertz(value float64, decimals *int) string {
 	absValue := math.Abs(value)
 
 	switch {
 	case absValue >= siGiga:
-		return trimTrailingZeros(value/siGiga, " GHz")
+		return formatUnitNumber(value/siGiga, " GHz", decimals)
 	case absValue >= siMega:
-		return trimTrailingZeros(value/siMega, " MHz")
+		return formatUnitNumber(value/siMega, " MHz", decimals)
 	case absValue >= siKilo:
-		return trimTrailingZeros(value/siKilo, " kHz")
+		return formatUnitNumber(value/siKilo, " kHz", decimals)
 	default:
-		return trimTrailingZeros(value, " Hz")
+		return formatUnitNumber(value, " Hz", decimals)
 	}
 }
 
 // formatWatt formats a value in watts.
-func formatWatt(value float64) string {
+func formatWatt(value float64, decimals *int) string {
 	absValue := math.Abs(value)
 
 	switch {
 	case absValue >= siKilo:
-		return trimTrailingZeros(value/siKilo, " kW")
+		return formatUnitNumber(value/siKilo, " kW", decimals)
 	default:
-		return trimTrailingZeros(value, " W")
+		return formatUnitNumber(value, " W", decimals)
 	}
 }
 
 // formatKilowatt formats a value in kilowatts.
-func formatKilowatt(value float64) string {
-	return trimTrailingZeros(value, " kW")
+func formatKilowatt(value float64, decimals *int) string {
+	return formatUnitNumber(value, " kW", decimals)
 }
 
 // formatVoltAmp formats a value in volt-amperes.
-func formatVoltAmp(value float64) string {
-	return trimTrailingZeros(value, " VA")
+func formatVoltAmp(value float64, decimals *int) string {
+	return formatUnitNumber(value, " VA", decimals)
 }
 
 // formatRawNumber formats a number with appropriate decimal places.
-func formatRawNumber(value float64) string {
+func formatRawNumber(value float64, decimals *int) string {
+	if decimals != nil {
+		return strconv.FormatFloat(value, 'f', *decimals, 64)
+	}
+
 	if value == math.Trunc(value) && math.Abs(value) < 1e15 {
 		return fmt.Sprintf("%.0f", value)
 	}
 
 	return fmt.Sprintf("%.2f", value)
+}
+
+func formatUnitNumber(value float64, suffix string, decimals *int) string {
+	if decimals != nil {
+		return strconv.FormatFloat(value, 'f', *decimals, 64) + suffix
+	}
+
+	return trimTrailingZeros(value, suffix)
 }
 
 // trimTrailingZeros formats a number to one decimal place and
@@ -433,7 +492,7 @@ func ExtractGaugeConfig(fieldConfig json.RawMessage) GaugeConfig {
 // range. Grafana named colors are resolved to hex.
 func (g *GaugeConfig) ThresholdColor(value float64) string {
 	if len(g.Thresholds) == 0 {
-		return "#00FF00" // default green
+		return grafanaGreen // default green
 	}
 
 	// In percentage mode, convert value to a percentage of the range.
@@ -446,7 +505,7 @@ func (g *GaugeConfig) ThresholdColor(value float64) string {
 	}
 
 	// Walk steps in reverse to find the highest matching threshold.
-	for i := len(g.Thresholds) - 1; i >= 0; i-- {
+	for i := range slices.Backward(g.Thresholds) {
 		step := g.Thresholds[i]
 		if step.Value == nil {
 			return resolveGrafanaColor(step.Color)
@@ -467,13 +526,13 @@ func (g *GaugeConfig) ThresholdColor(value float64) string {
 
 // grafanaColors maps Grafana's named color tokens to hex values.
 var grafanaColors = map[string]string{ //nolint:gochecknoglobals // read-only lookup
-	"green":             "#73BF69",
+	"green":             grafanaGreen,
 	"dark-green":        "#1A7311",
 	"semi-dark-green":   "#37872D",
 	"light-green":       "#96D98D",
 	"super-light-green": "#C8F2C2",
 
-	"red":             "#F2495C",
+	"red":             grafanaRed,
 	"dark-red":        "#AD0317",
 	"semi-dark-red":   "#E02F44",
 	"light-red":       "#FF7383",
@@ -485,13 +544,13 @@ var grafanaColors = map[string]string{ //nolint:gochecknoglobals // read-only lo
 	"light-blue":       "#8AB8FF",
 	"super-light-blue": "#C0D8FF",
 
-	"yellow":             "#FADE2A",
+	"yellow":             grafanaYellow,
 	"dark-yellow":        "#CC9D00",
 	"semi-dark-yellow":   "#E0B400",
 	"light-yellow":       "#FFEE52",
 	"super-light-yellow": "#FFF899",
 
-	"orange":             "#FF9830",
+	"orange":             grafanaOrange,
 	"dark-orange":        "#C4641A",
 	"semi-dark-orange":   "#E0752D",
 	"light-orange":       "#FFB357",
@@ -503,7 +562,7 @@ var grafanaColors = map[string]string{ //nolint:gochecknoglobals // read-only lo
 	"light-purple":       "#CA95E5",
 	"super-light-purple": "#DEB6F2",
 
-	"white": "#FFFFFF",
+	"white": colorWhite,
 	"gray":  "#808080",
 }
 

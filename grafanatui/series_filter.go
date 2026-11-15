@@ -179,21 +179,21 @@ func (s *seriesFilterView) View(_, height int) string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#999999",
-			Dark:  "#777777",
+			Light: colorLightMuted,
+			Dark:  colorDarkMuted,
 		})
 
 	cursorStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#000000",
-			Dark:  "#FFFFFF",
+			Light: colorBlack,
+			Dark:  colorWhite,
 		})
 
 	lines := []string{titleStyle.Render("  Filter Series (space: toggle, a: all, esc: apply)")}

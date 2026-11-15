@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -40,7 +41,8 @@ For basic auth set --username/--password or GRAFANA_USERNAME/GRAFANA_PASSWORD.
 When both are available, token auth takes precedence.`,
 		Args:    cobra.NoArgs,
 		Version: version,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, _ []string) error {
+			flags.refreshSet = command.Flags().Changed("refresh")
 			return run(flags)
 		},
 	}
@@ -62,8 +64,8 @@ When both are available, token auth takes precedence.`,
 		"Grafana basic auth password (env: GRAFANA_PASSWORD)",
 	)
 	rootCmd.Flags().DurationVar(
-		&flags.refresh, "refresh", 30*time.Second, //nolint:mnd // default refresh interval
-		"Auto-refresh interval",
+		&flags.refresh, "refresh", 0,
+		"Auto-refresh interval (dashboard setting or 30s; 0 disables)",
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -74,11 +76,12 @@ When both are available, token auth takes precedence.`,
 
 // flags holds the CLI flags for the root command.
 type flags struct {
-	url      string
-	token    string
-	username string
-	password string
-	refresh  time.Duration
+	url        string
+	token      string
+	username   string
+	password   string
+	refresh    time.Duration
+	refreshSet bool
 }
 
 // run creates the Grafana client and starts the TUI.
@@ -109,6 +112,7 @@ func run(f flags) error {
 	app := grafanatui.NewApp(client, grafanatui.Options{
 		TimeRange:      grafana.TimeRange{From: "now-1h", To: "now"},
 		Refresh:        f.refresh,
+		RefreshSet:     f.refreshSet,
 		DashboardUID:   dashUID,
 		InitialPanelID: panelID,
 	})
@@ -201,15 +205,22 @@ func initStderr() func() {
 
 	oldStderr := os.Stderr
 
-	const dataPath = "/tmp/grafana-tui"
-
-	err := os.MkdirAll(dataPath, 0o755)
+	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		slog.Error("error creating data directory, logs will be written to stderr (can result in glitches)", "error", err)
+		slog.Error("cannot find user cache directory", "error", err)
+		return cleanup
+	}
+	dataPath := filepath.Join(cacheDir, "grafana-tui")
+	if err := os.MkdirAll(dataPath, 0o700); err != nil {
+		slog.Error("error creating log directory", "error", err)
 		return cleanup
 	}
 
-	logFile, err := os.OpenFile(dataPath+"/grafana-tui.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o755)
+	logFile, err := os.OpenFile(
+		filepath.Join(dataPath, "grafana-tui.log"),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+		0o600,
+	)
 	if err != nil {
 		slog.Error("error opening log file, logs will be written to stderr (can result in glitches)", "error", err)
 		return cleanup
@@ -217,7 +228,7 @@ func initStderr() func() {
 
 	os.Stderr = logFile
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{ //nolint:exhaustruct // only Level needed
-		Level: slog.LevelDebug,
+		Level: slog.LevelInfo,
 	})))
 
 	cleanup = func() {

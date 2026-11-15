@@ -55,7 +55,7 @@ func (r *heatmapRenderer) Render(
 		return ""
 	}
 
-	seriesData := collectTimeSeries(result)
+	seriesData := collectTimeSeries(result, panel.FieldConfig)
 	if len(seriesData) == 0 {
 		return lipgloss.Place(
 			width, height,

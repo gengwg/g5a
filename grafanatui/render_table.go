@@ -1,8 +1,12 @@
 package grafanatui
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lovromazgon/grafana-tui/grafana"
@@ -13,177 +17,396 @@ const (
 	tableMinColWidth   = 3
 )
 
-// tableRenderer renders data in aligned columns with a header.
 type tableRenderer struct{}
+
+type tableOptions struct {
+	ShowHeader *bool `json:"showHeader"`
+	SortBy     []struct {
+		DisplayName string `json:"displayName"`
+		Desc        bool   `json:"desc"`
+	} `json:"sortBy"`
+}
+
+type tableColumn struct {
+	field  grafana.DataFrameField
+	header string
+	width  int
+	align  string
+}
+
+type tableRow struct {
+	values []any
+}
 
 func (r *tableRenderer) Render(
 	result *grafana.QueryResult,
 	panel grafana.Panel,
-	width, height int,
+	width int,
+	height int,
 	hiddenSeries map[string]bool,
 ) string {
-	// If the display mode is gauge-like, delegate to the gauge
-	// renderer instead of showing a plain table.
 	if isGaugeDisplayMode(panel.FieldConfig) {
 		gauge := &gaugeRenderer{}
 		return gauge.Render(result, panel, width, height, hiddenSeries)
 	}
 
-	headers, rows := collectTableData(result)
-	if len(headers) == 0 {
+	columns, rows := collectTableData(result, panel.FieldConfig)
+	if len(columns) == 0 {
 		return lipgloss.Place(
-			width, height,
-			lipgloss.Center, lipgloss.Center,
+			width,
+			height,
+			lipgloss.Center,
+			lipgloss.Center,
 			"no table data",
 		)
 	}
 
-	colWidths := calculateColumnWidths(headers, rows, width)
-	lines := renderTableLines(headers, rows, colWidths, height)
+	var options tableOptions
+	_ = json.Unmarshal(panel.Options, &options)
+	sortTableRows(rows, columns, options)
+
+	presented := presentTableRows(rows, columns, panel.FieldConfig)
+	colWidths := calculateColumnWidths(columns, presented, width)
+	lines := renderTableLines(
+		columns,
+		presented,
+		colWidths,
+		height,
+		options.ShowHeader == nil || *options.ShowHeader,
+	)
 
 	return strings.Join(lines, "\n")
 }
 
-// collectTableData gathers headers and rows from all frames.
 func collectTableData(
 	result *grafana.QueryResult,
-) ([]string, [][]string) {
-	for _, resultData := range result.Results {
-		for _, frame := range resultData.Frames {
-			headers, rows, err := frame.TableData()
-			if err != nil {
+	fieldConfig json.RawMessage,
+) ([]tableColumn, []tableRow) {
+	refIDs := make([]string, 0, len(result.Results))
+	for refID := range result.Results {
+		refIDs = append(refIDs, refID)
+	}
+	slices.Sort(refIDs)
+
+	var columns []tableColumn
+	rows := make([]tableRow, 0)
+	for _, refID := range refIDs {
+		for _, frame := range result.Results[refID].Frames {
+			frameColumns := tableColumns(frame.Schema.Fields, fieldConfig)
+			frameRows, err := tableRows(frame)
+			if err != nil || len(frameRows) == 0 {
 				continue
 			}
-
-			if len(headers) > 0 {
-				return headers, rows
+			if len(columns) == 0 {
+				columns = frameColumns
 			}
+			if !sameTableFields(columns, frameColumns) {
+				continue
+			}
+			rows = append(rows, frameRows...)
 		}
 	}
 
-	return nil, nil
+	return columns, rows
 }
 
-// calculateColumnWidths determines each column's width, capped to
-// fit the terminal.
-func calculateColumnWidths(
-	headers []string,
-	rows [][]string,
-	maxWidth int,
-) []int {
-	widths := make([]int, len(headers))
-
-	for i, header := range headers {
-		widths[i] = len(header)
+func tableColumns(
+	fields []grafana.DataFrameField,
+	fieldConfig json.RawMessage,
+) []tableColumn {
+	columns := make([]tableColumn, 0, len(fields))
+	for _, field := range fields {
+		presentation := presentField(fieldConfig, field, nil)
+		columns = append(columns, tableColumn{
+			field:  field,
+			header: presentation.DisplayName,
+			width:  presentation.Width,
+			align:  presentation.Align,
+		})
 	}
 
-	for _, row := range rows {
-		for i, cell := range row {
-			if i < len(widths) && len(cell) > widths[i] {
-				widths[i] = len(cell)
+	return columns
+}
+
+func tableRows(frame grafana.DataFrame) ([]tableRow, error) {
+	if len(frame.Schema.Fields) == 0 || len(frame.Data.Values) == 0 {
+		return []tableRow{}, nil
+	}
+
+	columns := make([][]any, len(frame.Schema.Fields))
+	rowCount := 0
+	for index := range frame.Schema.Fields {
+		if index >= len(frame.Data.Values) {
+			columns[index] = []any{}
+			continue
+		}
+		if err := json.Unmarshal(frame.Data.Values[index], &columns[index]); err != nil {
+			return nil, fmt.Errorf("decoding table column %q: %w", frame.Schema.Fields[index].Name, err)
+		}
+		rowCount = max(rowCount, len(columns[index]))
+	}
+
+	rows := make([]tableRow, rowCount)
+	for rowIndex := range rowCount {
+		values := make([]any, len(columns))
+		for columnIndex := range columns {
+			if rowIndex < len(columns[columnIndex]) {
+				values[columnIndex] = columns[columnIndex][rowIndex]
+			}
+		}
+		rows[rowIndex] = tableRow{values: values}
+	}
+
+	return rows, nil
+}
+
+func sameTableFields(left, right []tableColumn) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].field.Name != right[index].field.Name {
+			return false
+		}
+	}
+
+	return true
+}
+
+func sortTableRows(
+	rows []tableRow,
+	columns []tableColumn,
+	options tableOptions,
+) {
+	if len(options.SortBy) == 0 {
+		return
+	}
+
+	sort.SliceStable(rows, func(i, j int) bool {
+		for _, sortField := range options.SortBy {
+			columnIndex := tableColumnIndex(columns, sortField.DisplayName)
+			if columnIndex < 0 {
+				continue
+			}
+			comparison := compareTableValues(
+				rows[i].values[columnIndex],
+				rows[j].values[columnIndex],
+			)
+			if comparison == 0 {
+				continue
+			}
+			if sortField.Desc {
+				return comparison > 0
+			}
+			return comparison < 0
+		}
+
+		return false
+	})
+}
+
+func tableColumnIndex(columns []tableColumn, displayName string) int {
+	for index, column := range columns {
+		if column.header == displayName || column.field.Name == displayName {
+			return index
+		}
+	}
+
+	return -1
+}
+
+func compareTableValues(left, right any) int {
+	leftNumber, leftOK := fieldNumber(left)
+	rightNumber, rightOK := fieldNumber(right)
+	if leftOK && rightOK {
+		switch {
+		case leftNumber < rightNumber:
+			return -1
+		case leftNumber > rightNumber:
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	return strings.Compare(
+		fmt.Sprint(left),
+		fmt.Sprint(right),
+	)
+}
+
+func presentTableRows(
+	rows []tableRow,
+	columns []tableColumn,
+	fieldConfig json.RawMessage,
+) [][]fieldPresentation {
+	presented := make([][]fieldPresentation, len(rows))
+	for rowIndex, row := range rows {
+		presented[rowIndex] = make([]fieldPresentation, len(columns))
+		for columnIndex, column := range columns {
+			presented[rowIndex][columnIndex] = presentField(
+				fieldConfig,
+				column.field,
+				row.values[columnIndex],
+			)
+			if column.field.Type == fieldTypeTime {
+				presented[rowIndex][columnIndex].Text = formatTableTime(
+					row.values[columnIndex],
+					presented[rowIndex][columnIndex].Text,
+				)
 			}
 		}
 	}
 
-	// Cap total width to terminal width.
-	totalPadding := (len(widths) - 1) * tableColumnPadding
-	availableWidth := maxWidth - totalPadding
+	return presented
+}
 
-	availableWidth = max(availableWidth, len(widths)*tableMinColWidth)
-
-	totalWidth := 0
-	for _, w := range widths {
-		totalWidth += w
+func formatTableTime(value any, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	milliseconds, ok := fieldNumber(value)
+	if !ok {
+		return fallback
 	}
 
-	if totalWidth > availableWidth {
-		scaleColumnWidths(widths, availableWidth, totalWidth)
+	//nolint:gosmopolitan // table timestamps use the viewer's local timezone
+	return time.UnixMilli(int64(milliseconds)).In(time.Local).Format("2006-01-02 15:04:05")
+}
+
+func calculateColumnWidths(
+	columns []tableColumn,
+	rows [][]fieldPresentation,
+	maxWidth int,
+) []int {
+	widths := make([]int, len(columns))
+	for index, column := range columns {
+		widths[index] = max(lipgloss.Width(column.header), tableMinColWidth)
+		if column.width > 0 {
+			widths[index] = max(widths[index], column.width/10)
+		}
+	}
+	for _, row := range rows {
+		for index, cell := range row {
+			if index < len(widths) {
+				widths[index] = max(widths[index], lipgloss.Width(cell.Text))
+			}
+		}
+	}
+
+	totalPadding := max((len(widths)-1)*tableColumnPadding, 0)
+	available := max(maxWidth-totalPadding, len(widths)*tableMinColWidth)
+	total := 0
+	for _, width := range widths {
+		total += width
+	}
+	if total > available {
+		for index, width := range widths {
+			widths[index] = max(width*available/total, tableMinColWidth)
+		}
 	}
 
 	return widths
 }
 
-// scaleColumnWidths proportionally scales column widths to fit.
-func scaleColumnWidths(
-	widths []int,
-	availableWidth, totalWidth int,
-) {
-	for i := range widths {
-		widths[i] = max(
-			widths[i]*availableWidth/totalWidth,
-			tableMinColWidth,
-		)
-	}
-}
-
-// renderTableLines builds the formatted table output.
+//nolint:exhaustruct // presentation defaults are intentionally zero-valued
 func renderTableLines(
-	headers []string,
-	rows [][]string,
-	colWidths []int,
+	columns []tableColumn,
+	rows [][]fieldPresentation,
+	widths []int,
 	maxHeight int,
+	showHeader bool,
 ) []string {
-	headerStyle := lipgloss.NewStyle().Bold(true)
-
-	lines := make([]string, 0, len(rows)+2) //nolint:mnd // header + separator
-
-	// Header row.
-	headerLine := formatRow(headers, colWidths)
-	lines = append(lines, headerStyle.Render(headerLine))
-
-	// Separator.
-	lines = append(lines, buildSeparator(colWidths))
-
-	// Data rows.
-	maxDataRows := max(maxHeight-2, 1) //nolint:mnd // header + separator
-
-	remaining := len(rows) - maxDataRows
-	displayRows := rows
-
-	if remaining > 0 {
-		displayRows = rows[:maxDataRows]
+	lines := make([]string, 0, maxHeight)
+	if showHeader {
+		headers := make([]fieldPresentation, len(columns))
+		for index, column := range columns {
+			headers[index] = fieldPresentation{Text: column.header}
+		}
+		header := formatTableRow(headers, widths, columns, true)
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Render(header))
+		lines = append(lines, buildTableSeparator(widths))
 	}
 
-	for _, row := range displayRows {
-		lines = append(lines, formatRow(row, colWidths))
+	remainingHeight := maxHeight - len(lines)
+	if remainingHeight <= 0 {
+		return lines[:maxHeight]
 	}
-
-	if remaining > 0 {
-		lines = append(
-			lines,
-			fmt.Sprintf("... and %d more rows", remaining),
-		)
+	displayCount := min(len(rows), remainingHeight)
+	truncated := len(rows) > remainingHeight
+	if truncated {
+		displayCount = min(len(rows), max(remainingHeight-1, 0))
+	}
+	for index := range displayCount {
+		lines = append(lines, formatTableRow(rows[index], widths, columns, false))
+	}
+	if truncated && len(lines) < maxHeight {
+		lines = append(lines, fmt.Sprintf("... and %d more rows", len(rows)-displayCount))
 	}
 
 	return lines
 }
 
-// formatRow formats a single row with proper column alignment.
-func formatRow(cells []string, colWidths []int) string {
-	parts := make([]string, len(colWidths))
-
-	for i, width := range colWidths {
-		cell := ""
-		if i < len(cells) {
-			cell = cells[i]
+//nolint:exhaustruct // empty cells use all zero-value presentation fields
+func formatTableRow(
+	cells []fieldPresentation,
+	widths []int,
+	columns []tableColumn,
+	header bool,
+) string {
+	parts := make([]string, len(widths))
+	for index, width := range widths {
+		cell := fieldPresentation{}
+		if index < len(cells) {
+			cell = cells[index]
 		}
-
-		if len(cell) > width {
-			cell = cell[:width]
+		text := truncateTableText(cell.Text, width)
+		align := lipgloss.Left
+		if !header && index < len(columns) {
+			switch columns[index].align {
+			case alignCenter:
+				align = lipgloss.Center
+			case directionRight:
+				align = lipgloss.Right
+			}
 		}
-
-		parts[i] = fmt.Sprintf("%-*s", width, cell)
+		style := lipgloss.NewStyle().Width(width).Align(align)
+		if !header && cell.Color != "" {
+			if cell.Background {
+				style = style.Background(lipgloss.Color(cell.Color)).
+					Foreground(lipgloss.Color(contrastColor(cell.Color)))
+			} else {
+				style = style.Foreground(lipgloss.Color(cell.Color))
+			}
+		}
+		parts[index] = style.Render(text)
 	}
 
 	return strings.Join(parts, strings.Repeat(" ", tableColumnPadding))
 }
 
-// buildSeparator creates a horizontal line matching column widths.
-func buildSeparator(colWidths []int) string {
-	parts := make([]string, len(colWidths))
+func truncateTableText(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(text) <= width {
+		return text
+	}
 
-	for i, width := range colWidths {
-		parts[i] = strings.Repeat("─", width)
+	runes := []rune(text)
+	for end := len(runes); end > 0; end-- {
+		if lipgloss.Width(string(runes[:end])) <= width {
+			return string(runes[:end])
+		}
+	}
+
+	return ""
+}
+
+func buildTableSeparator(widths []int) string {
+	parts := make([]string, len(widths))
+	for index, width := range widths {
+		parts[index] = strings.Repeat("─", width)
 	}
 
 	return strings.Join(parts, strings.Repeat(" ", tableColumnPadding))

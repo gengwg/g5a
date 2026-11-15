@@ -12,6 +12,7 @@ import (
 const (
 	fieldTypeNumber = "number"
 	fieldTypeTime   = "time"
+	fieldTypeString = "string"
 )
 
 // Errors returned by DataFrame parsing methods.
@@ -96,7 +97,7 @@ func (f *DataFrame) CategorizedValues() (
 	catIdx := -1
 
 	for i, field := range f.Schema.Fields {
-		if field.Type == "string" {
+		if field.Type == fieldTypeString {
 			catIdx = i
 			break
 		}
@@ -265,6 +266,16 @@ func formatFieldKey(field DataFrameField) string {
 	}
 
 	return field.Name + "{" + strings.Join(pairs, ",") + "}"
+}
+
+// mustMarshal is a small fixture/data-frame helper used by transformations.
+func mustMarshal(value any) json.RawMessage {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+
+	return data
 }
 
 // transposeColumns converts column-oriented data to row-oriented.

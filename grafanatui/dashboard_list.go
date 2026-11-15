@@ -117,7 +117,7 @@ func (d *dashboardListView) selectDashboard() (view, tea.Cmd) {
 		return d, nil
 	}
 
-	pv := newPanelView(d.client, selected.result.UID)
+	pv := newDashboardView(d.client, selected.result.UID)
 
 	return d, func() tea.Msg {
 		return pushViewMsg{v: pv}

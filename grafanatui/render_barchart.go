@@ -180,8 +180,8 @@ func renderYAxis(maxVal float64, chartHeight int) string {
 
 	axisStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#999999",
-			Dark:  "#777777",
+			Light: colorLightMuted,
+			Dark:  colorDarkMuted,
 		})
 
 	// Build lines from top to bottom. The chart area is chartHeight

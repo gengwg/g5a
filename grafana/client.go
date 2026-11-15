@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Client is an HTTP client for the Grafana API.
@@ -24,6 +27,7 @@ type Client struct {
 	dsCache map[string]string
 	// dsTypeCache maps datasource type → first UID of that type.
 	dsTypeCache map[string]string
+	dsMutex     sync.Mutex
 }
 
 // ClientOption configures a [Client].
@@ -54,12 +58,12 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("parsing grafana URL: %w", err)
 	}
 
-	client := &Client{
+	client := &Client{ //nolint:exhaustruct // mutex and optional caches use zero values
 		baseURL:     parsedURL,
 		token:       "",
 		username:    "",
 		password:    "",
-		httpClient:  http.DefaultClient,
+		httpClient:  &http.Client{Timeout: 60 * time.Second}, //nolint:exhaustruct // default transport settings
 		dsCache:     nil,
 		dsTypeCache: nil,
 	}
@@ -110,29 +114,26 @@ func (c *Client) doJSON(
 
 	c.setAuthHeader(request)
 
-	slog.Info("grafana request", "url", fullURL)
+	slog.Debug("grafana request", "method", http.MethodGet, "path", request.URL.Path)
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		slog.Error("grafana request error", "url", fullURL, "error", err)
-
-		return fmt.Errorf("executing request: %w", err)
+		return sanitizedTransportError(err)
 	}
 
-	// Read response body for logging, then close.
 	responseBody, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 
-	slog.Info("grafana response",
-		"url", fullURL,
-		"status", response.Status, "body", string(responseBody),
+	slog.Debug("grafana response",
+		"path", request.URL.Path,
+		"status", response.StatusCode,
+		"bytes", len(responseBody),
 	)
 
 	if response.StatusCode != http.StatusOK {
 		return &apiError{
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
-			Body:       string(responseBody),
 		}
 	}
 
@@ -168,29 +169,26 @@ func (c *Client) doPostJSON(
 	request.Header.Set("Content-Type", "application/json")
 	c.setAuthHeader(request)
 
-	slog.Info("grafana request", "method", "POST", "url", fullURL,
-		"body", string(bodyBytes))
+	slog.Debug("grafana request", "method", http.MethodPost, "path", request.URL.Path)
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		slog.Error("grafana request error", "url", fullURL, "error", err)
-
-		return fmt.Errorf("executing request: %w", err)
+		return sanitizedTransportError(err)
 	}
 
 	responseBody, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 
-	slog.Info("grafana response",
-		"url", fullURL,
-		"status", response.Status, "body", string(responseBody),
+	slog.Debug("grafana response",
+		"path", request.URL.Path,
+		"status", response.StatusCode,
+		"bytes", len(responseBody),
 	)
 
 	if response.StatusCode != http.StatusOK {
 		return &apiError{
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
-			Body:       string(responseBody),
 		}
 	}
 
@@ -239,6 +237,9 @@ type datasourceInfo struct {
 func (c *Client) ResolveDatasourceUID(
 	ctx context.Context, nameOrUID, typeHint string,
 ) string {
+	c.dsMutex.Lock()
+	defer c.dsMutex.Unlock()
+
 	if c.dsCache == nil {
 		c.dsCache = make(map[string]string)
 		c.dsTypeCache = make(map[string]string)
@@ -293,11 +294,20 @@ func (c *Client) populateDatasourceCache(ctx context.Context) {
 type apiError struct {
 	StatusCode int
 	Status     string
-	Body       string
 }
 
 func (e *apiError) Error() string {
-	return fmt.Sprintf(
-		"grafana API error: %s: %s", e.Status, e.Body,
-	)
+	return "grafana API error: " + e.Status
+}
+
+func sanitizedTransportError(err error) error {
+	for {
+		var urlError *url.Error
+		if !errors.As(err, &urlError) {
+			break
+		}
+		err = urlError.Err
+	}
+
+	return fmt.Errorf("executing request: %w", err)
 }

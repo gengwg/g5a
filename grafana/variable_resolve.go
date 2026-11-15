@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -18,245 +19,580 @@ var (
 	errLabelValuesFailed = errors.New("label values query failed")
 )
 
-// labelValuesPattern matches label_values(metric{filters}, label)
-// and label_values(label) query formats.
-var labelValuesPattern = regexp.MustCompile(
-	`label_values\(\s*([^,)]*?)\s*(?:,\s*(\w+)\s*)?\)`,
-)
+const datasourceVariableName = "datasource"
 
-// promLabelValuesResult is the Prometheus /api/v1/label/.../values
-// response.
-type promLabelValuesResult struct {
-	Status string   `json:"status"`
-	Data   []string `json:"data"`
-}
-
-// ResolveVariableOptions queries Prometheus to get available options
-// for each template variable. Variables are resolved in order since
-// later variables may reference earlier ones in their queries.
-// Returns a map of variable name to available options, and a map of
-// variable name to selected default value.
+// ResolveVariableOptions resolves variables using a one-hour default window.
+// New callers should use ResolveVariableOptionsWithTimeRange.
 func (c *Client) ResolveVariableOptions(
 	ctx context.Context,
 	variables []TemplateVariable,
 ) (map[string][]string, map[string]string, error) {
+	return c.ResolveVariableOptionsWithTimeRange(
+		ctx,
+		variables,
+		TimeRange{From: "now-1h", To: "now"},
+	)
+}
+
+// ResolveVariableOptionsWithTimeRange resolves variables using saved selections.
+func (c *Client) ResolveVariableOptionsWithTimeRange(
+	ctx context.Context,
+	variables []TemplateVariable,
+	timeRange TimeRange,
+) (map[string][]string, map[string]string, error) {
+	return c.ResolveVariableOptionsWithSelections(
+		ctx,
+		variables,
+		timeRange,
+		nil,
+	)
+}
+
+// ResolveVariableOptionsWithSelections resolves variables in dashboard order,
+// using current selections for dependent queries when supplied.
+//
+//nolint:cyclop // variable types and selection handling share one ordered pipeline
+func (c *Client) ResolveVariableOptionsWithSelections(
+	ctx context.Context,
+	variables []TemplateVariable,
+	timeRange TimeRange,
+	selections map[string]string,
+) (map[string][]string, map[string]string, error) {
 	options := make(map[string][]string, len(variables))
 	defaults := make(map[string]string, len(variables))
+	var datasources []datasourceInfo
 
-	// Find a fallback datasource UID from variables that have one.
-	// Grafana uses the default datasource when none is specified.
-	fallbackDSUID := findFallbackDatasource(variables)
-
-	for _, v := range variables {
+	for _, variable := range variables {
 		var opts []string
+		current := resolveCurrentValue(variable)
+		if selected, ok := selections[variable.Name]; ok && selected != "" {
+			current = selected
+		}
 
-		switch v.Type {
+		switch variable.Type {
 		case "custom", "constant":
-			opts = parseCustomVariableOptions(v)
+			opts = parseCustomVariableOptions(variable)
+		case datasourceVariableName:
+			if datasources == nil {
+				if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
+					return nil, nil, fmt.Errorf("listing datasources: %w", err)
+				}
+			}
+			opts = datasourceVariableOptions(variable, datasources)
+			current = resolveDatasourceSelection(current, datasources)
 		case "query":
 			fetched, err := c.fetchQueryVariableOptions(
-				ctx, v, defaults, fallbackDSUID,
+				ctx,
+				variable,
+				variables,
+				defaults,
+				timeRange,
 			)
 			if err != nil {
-				slog.Debug("grafana failed to resolve variable", "variable", v.Name, "error", err)
+				if errors.Is(err, errUnsupportedTimeRange) {
+					return nil, nil, err
+				}
+				slog.Warn("failed to resolve dashboard variable",
+					"variable", variable.Name,
+					"error", err,
+				)
 			} else {
 				opts = fetched
 			}
+		default:
+			opts = parseCustomVariableOptions(variable)
 		}
 
-		options[v.Name] = opts
-
-		// Pick default: current value if non-empty and valid,
-		// then "all" when available, then first option.
-		current := resolveCurrentValue(v)
-
-		switch {
-		case current != "" && isValidOption(current, opts, v.IncludeAll):
-			defaults[v.Name] = current
-		case v.IncludeAll:
-			if v.AllValue != "" {
-				defaults[v.Name] = v.AllValue
-			} else {
-				defaults[v.Name] = ".*"
-			}
-		case len(opts) > 0:
-			defaults[v.Name] = opts[0]
-		}
+		options[variable.Name] = opts
+		defaults[variable.Name] = defaultVariableSelection(variable, opts, current)
 	}
 
 	return options, defaults, nil
 }
 
-// isValidOption checks whether the current value is a valid selection.
-// "All" regex patterns (like ".*") are valid when includeAll is true.
-// Otherwise the value must appear in the fetched options list.
-func isValidOption(
-	current string, opts []string, includeAll bool,
-) bool {
-	// If options weren't fetched (custom vars, errors), trust current.
-	if len(opts) == 0 {
-		return true
-	}
-
-	// "All" patterns are valid when the variable supports it.
-	if includeAll && (current == ".*" || current == grafanaAllToken) {
-		return true
-	}
-
-	return slices.Contains(opts, current)
-}
-
-// parseCustomVariableOptions extracts options from a custom or
-// constant variable.
 func parseCustomVariableOptions(v TemplateVariable) []string {
-	// Use pre-populated options if available.
 	if len(v.Options) > 0 {
 		opts := make([]string, 0, len(v.Options))
-		for _, o := range v.Options {
-			opts = append(opts, o.Value)
+		for _, option := range v.Options {
+			opts = append(opts, option.Value)
 		}
-
 		return opts
 	}
 
-	// Fall back to parsing the query as comma-separated values.
 	query := queryDefinition(v)
 	if query == "" {
-		return nil
+		return []string{}
 	}
 
-	parts := strings.Split(query, ",")
-	opts := make([]string, 0, len(parts))
-
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			opts = append(opts, p)
-		}
-	}
-
-	return opts
+	return splitVariableValues(query)
 }
 
-// findFallbackDatasource returns the UID of the first Prometheus
-// datasource found among the given variables. Returns empty string
-// if none is found.
-func findFallbackDatasource(variables []TemplateVariable) string {
-	for _, v := range variables {
-		if v.Datasource != nil && v.Datasource.UID != "" {
-			return v.Datasource.UID
+func datasourceVariableOptions(
+	variable TemplateVariable,
+	datasources []datasourceInfo,
+) []string {
+	wantedType := strings.Trim(queryDefinition(variable), `"`)
+	matcher := compileVariableRegex(variable.Regex)
+	options := make([]string, 0, len(datasources))
+
+	for _, datasource := range datasources {
+		if wantedType != "" && datasource.Type != wantedType {
+			continue
 		}
+		if matcher != nil && !matcher.MatchString(datasource.Name) {
+			continue
+		}
+		options = append(options, datasource.UID)
+	}
+
+	slices.Sort(options)
+
+	return options
+}
+
+func resolveDatasourceSelection(
+	current string,
+	datasources []datasourceInfo,
+) string {
+	for _, datasource := range datasources {
+		if current == datasource.UID || current == datasource.Name {
+			return datasource.UID
+		}
+	}
+
+	return current
+}
+
+//nolint:cyclop // saved selection precedence includes multi and All forms
+func defaultVariableSelection(
+	variable TemplateVariable,
+	options []string,
+	current string,
+) string {
+	if isAllSelection(variable, current) {
+		if variable.AllValue != "" && current == variable.AllValue {
+			return current
+		}
+		if current != "" && current != ".*" {
+			return current
+		}
+		return grafanaAllToken
+	}
+
+	if variable.Multi && strings.Contains(current, ",") {
+		selected := splitVariableValues(current)
+		valid := true
+		for _, value := range selected {
+			if !slices.Contains(options, value) {
+				valid = false
+				break
+			}
+		}
+		if valid && len(selected) > 0 {
+			return strings.Join(selected, ",")
+		}
+	}
+
+	if current != "" && (len(options) == 0 || slices.Contains(options, current)) {
+		return current
+	}
+	if variable.IncludeAll {
+		if variable.AllValue != "" {
+			return variable.AllValue
+		}
+		return grafanaAllToken
+	}
+	if len(options) > 0 {
+		return options[0]
 	}
 
 	return ""
 }
 
-// fetchQueryVariableOptions resolves a query-type variable by calling
-// the Prometheus label values API.
+//nolint:cyclop,funlen // supports label_values, generic query_result, and native query types
 func (c *Client) fetchQueryVariableOptions(
 	ctx context.Context,
-	v TemplateVariable,
+	variable TemplateVariable,
+	variables []TemplateVariable,
 	resolved map[string]string,
-	fallbackDSUID string,
+	timeRange TimeRange,
 ) ([]string, error) {
-	query := queryDefinition(v)
+	query := ResolveVariables(queryDefinition(variable), variables, resolved)
 	if query == "" {
-		return nil, nil
+		return []string{}, nil
+	}
+	if !validTimeExpression(timeRange.From) || !validTimeExpression(timeRange.To) {
+		return nil, fmt.Errorf("%w: %s to %s", errUnsupportedTimeRange, timeRange.From, timeRange.To)
+	}
+	fromMs, toMs := resolveTimeRange(timeRange)
+
+	datasourceUID := ""
+	datasourceType := ""
+	if variable.Datasource != nil {
+		datasourceUID = ResolveVariables(variable.Datasource.UID, variables, resolved)
+		datasourceType = variable.Datasource.Type
+	}
+	if datasourceUID == "" {
+		datasourceUID = resolved[datasourceVariableName]
+	}
+	if datasourceUID == "" {
+		return nil, fmt.Errorf("%w: %s", errNoDatasource, variable.Name)
+	}
+	datasourceUID = c.ResolveDatasourceUID(ctx, datasourceUID, datasourceType)
+	if unresolvedDatasourceUID(datasourceUID) {
+		return nil, fmt.Errorf("%w: %s", errNoDatasource, variable.Name)
 	}
 
-	// Substitute already-resolved variables into the query.
-	for name, value := range resolved {
-		query = strings.ReplaceAll(query, "$"+name, value)
-		query = strings.ReplaceAll(query, "${"+name+"}", value)
+	if metric, label, ok := parseLabelValuesQuery(query); ok {
+		values, err := c.queryLabelValues(ctx, datasourceUID, label, metric)
+		if err != nil {
+			return nil, err
+		}
+		return finishVariableOptions(values, variable), nil
 	}
 
-	matches := labelValuesPattern.FindStringSubmatch(query)
-	if matches == nil {
-		slog.Debug("grafana unsupported variable query format", "query", query)
-
-		return nil, nil
-	}
-
-	metric := strings.TrimSpace(matches[1])
-	label := strings.TrimSpace(matches[2])
-
-	// Form: label_values(label) — metric is actually the label.
-	if label == "" {
-		label = metric
-		metric = ""
-	}
-
-	dsUID := ""
-	if v.Datasource != nil {
-		dsUID = v.Datasource.UID
-	}
-
-	if dsUID == "" {
-		dsUID = fallbackDSUID
-	}
-
-	if dsUID == "" {
-		return nil, fmt.Errorf(
-			"%w %q", errNoDatasource, v.Name,
+	if queryType := datasourceQueryType(variable); queryType != "" {
+		target := map[string]any{
+			"refId":      "vars",
+			"queryType":  queryType,
+			"datasource": DatasourceRef{UID: datasourceUID, Type: datasourceType},
+		}
+		rawTarget, err := json.Marshal(target)
+		if err != nil {
+			return nil, fmt.Errorf("encoding variable query type: %w", err)
+		}
+		result, err := c.queryDatasource(
+			ctx,
+			[]json.RawMessage{rawTarget},
+			fromMs,
+			toMs,
 		)
+		if err != nil {
+			return nil, err
+		}
+		return finishVariableOptions(variableOptionsFromFrames(result), variable), nil
 	}
 
-	return c.queryLabelValues(ctx, dsUID, label, metric)
+	expression := query
+	if strings.HasPrefix(query, "query_result(") && strings.HasSuffix(query, ")") {
+		expression = strings.TrimSuffix(strings.TrimPrefix(query, "query_result("), ")")
+	}
+
+	target := map[string]any{
+		"refId":      "vars",
+		"expr":       expression,
+		"instant":    true,
+		"range":      false,
+		"format":     "time_series",
+		"datasource": DatasourceRef{UID: datasourceUID, Type: datasourceType},
+	}
+	rawTarget, err := json.Marshal(target)
+	if err != nil {
+		return nil, fmt.Errorf("encoding variable query: %w", err)
+	}
+
+	result, err := c.queryDatasource(
+		ctx,
+		[]json.RawMessage{rawTarget},
+		fromMs,
+		toMs,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	values := variableOptionsFromFrames(result)
+	return finishVariableOptions(values, variable), nil
 }
 
-// queryLabelValues calls the Prometheus label values API via the
-// Grafana datasource proxy.
+//nolint:cyclop // label_values parsing handles nested selectors and quoted delimiters
+func parseLabelValuesQuery(query string) (metric, label string, ok bool) {
+	const functionName = "label_values"
+
+	query = strings.TrimSpace(query)
+	if !strings.HasPrefix(query, functionName) {
+		return "", "", false
+	}
+	arguments := strings.TrimSpace(query[len(functionName):])
+	if len(arguments) < 2 || arguments[0] != '(' || arguments[len(arguments)-1] != ')' {
+		return "", "", false
+	}
+
+	parts, ok := splitTopLevelComma(arguments[1 : len(arguments)-1])
+	if !ok {
+		return "", "", false
+	}
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+		if parts[index] == "" {
+			return "", "", false
+		}
+	}
+
+	switch len(parts) {
+	case 1:
+		return "", parts[0], true
+	case 2:
+		return parts[0], parts[1], true
+	default:
+		return "", "", false
+	}
+}
+
+// splitTopLevelComma splits arguments without splitting selectors or quoted strings.
+//
+//nolint:gocyclo,cyclop,funlen // top-level delimiter tracking has several small states
+func splitTopLevelComma(input string) ([]string, bool) {
+	parts := make([]string, 0, 2)
+	start := 0
+	var quote byte
+	var braces, brackets, parentheses int
+
+	for index := 0; index < len(input); index++ {
+		char := input[index]
+		if quote != 0 {
+			if char == '\\' && quote != '`' {
+				index++
+				continue
+			}
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+
+		switch char {
+		case '"', '\'', '`':
+			quote = char
+		case '{':
+			braces++
+		case '}':
+			if braces == 0 {
+				return nil, false
+			}
+			braces--
+		case '[':
+			brackets++
+		case ']':
+			if brackets == 0 {
+				return nil, false
+			}
+			brackets--
+		case '(':
+			parentheses++
+		case ')':
+			if parentheses == 0 {
+				return nil, false
+			}
+			parentheses--
+		case ',':
+			if braces == 0 && brackets == 0 && parentheses == 0 {
+				parts = append(parts, input[start:index])
+				start = index + 1
+			}
+		}
+	}
+
+	if quote != 0 || braces != 0 || brackets != 0 || parentheses != 0 {
+		return nil, false
+	}
+
+	return append(parts, input[start:]), true
+}
+
 func (c *Client) queryLabelValues(
 	ctx context.Context,
-	dsUID, label, metric string,
+	datasourceUID string,
+	label string,
+	metric string,
 ) ([]string, error) {
-	path := fmt.Sprintf(
-		"/api/datasources/proxy/uid/%s/api/v1/label/%s/values",
-		url.PathEscape(dsUID), url.PathEscape(label),
-	)
-
+	path := "/api/datasources/proxy/uid/" + url.PathEscape(datasourceUID) +
+		"/api/v1/label/" + url.PathEscape(label) + "/values"
 	if metric != "" {
-		path += "?" + url.Values{"match[]": {metric}}.Encode()
+		path += "?match[]=" + url.QueryEscape(metric)
 	}
 
 	var result promLabelValuesResult
 	if err := c.doJSON(ctx, path, &result); err != nil {
 		return nil, err
 	}
-
 	if result.Status != "success" {
-		return nil, fmt.Errorf("%w: %s", errLabelValuesFailed, label)
+		return nil, fmt.Errorf("%w with status %q", errLabelValuesFailed, result.Status)
 	}
-
-	sort.Strings(result.Data)
 
 	return result.Data, nil
 }
 
-// queryDefinition extracts the query string from a template variable.
-// The query can be a plain string or an object with a "query" field.
+type promLabelValuesResult struct {
+	Status string   `json:"status"`
+	Data   []string `json:"data"`
+}
+
+func variableOptionsFromFrames(result *QueryResult) []string {
+	values := make([]string, 0)
+	for _, refID := range sortedResultRefIDs(result) {
+		for _, frame := range result.Results[refID].Frames {
+			for fieldIndex, field := range frame.Schema.Fields {
+				if fieldIndex >= len(frame.Data.Values) {
+					continue
+				}
+				if field.Type == fieldTypeString {
+					column, err := parseStringValues(frame.Data.Values[fieldIndex])
+					if err == nil {
+						values = append(values, column...)
+					}
+					continue
+				}
+				if len(field.Labels) == 0 {
+					continue
+				}
+				values = append(values, fieldLabelText(field))
+			}
+		}
+	}
+
+	return values
+}
+
+func fieldLabelText(field DataFrameField) string {
+	keys := make([]string, 0, len(field.Labels))
+	for key := range field.Labels {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%q", key, field.Labels[key]))
+	}
+
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func finishVariableOptions(
+	values []string,
+	variable TemplateVariable,
+) []string {
+	matcher := compileVariableRegex(variable.Regex)
+	seen := make(map[string]bool, len(values))
+	options := make([]string, 0, len(values))
+
+	for _, value := range values {
+		extracted := applyVariableRegex(matcher, value)
+		for _, option := range extracted {
+			if option == "" || seen[option] {
+				continue
+			}
+			seen[option] = true
+			options = append(options, option)
+		}
+	}
+
+	sortVariableOptions(options, variable.Sort)
+
+	return options
+}
+
+func compileVariableRegex(expression string) *regexp.Regexp {
+	if len(expression) >= 2 && strings.HasPrefix(expression, "/") && strings.HasSuffix(expression, "/") {
+		expression = strings.TrimSuffix(strings.TrimPrefix(expression, "/"), "/")
+	}
+	if expression == "" {
+		return nil
+	}
+	matcher, err := regexp.Compile(expression)
+	if err != nil {
+		slog.Warn("invalid dashboard variable regex", "error", err)
+		return nil
+	}
+
+	return matcher
+}
+
+func applyVariableRegex(matcher *regexp.Regexp, value string) []string {
+	if matcher == nil {
+		return []string{value}
+	}
+	matches := matcher.FindStringSubmatch(value)
+	if matches == nil {
+		return nil
+	}
+	if len(matches) > 1 {
+		return []string{matches[1]}
+	}
+
+	return []string{matches[0]}
+}
+
+func sortVariableOptions(options []string, mode int) {
+	switch mode {
+	case 1:
+		slices.Sort(options)
+	case 2:
+		slices.SortFunc(options, func(a, b string) int { return strings.Compare(b, a) })
+	case 3, 4:
+		sort.SliceStable(options, func(i, j int) bool {
+			left, leftErr := strconv.ParseFloat(options[i], 64)
+			right, rightErr := strconv.ParseFloat(options[j], 64)
+			if leftErr != nil || rightErr != nil {
+				return options[i] < options[j]
+			}
+			if mode == 4 {
+				return left > right
+			}
+			return left < right
+		})
+	case 5, 6:
+		sort.SliceStable(options, func(i, j int) bool {
+			left := strings.ToLower(options[i])
+			right := strings.ToLower(options[j])
+			if mode == 6 {
+				return left > right
+			}
+			return left < right
+		})
+	}
+}
+
+func datasourceQueryType(variable TemplateVariable) string {
+	var query struct {
+		QueryType string `json:"queryType"`
+	}
+	if err := json.Unmarshal(variable.Query, &query); err != nil {
+		return ""
+	}
+
+	return query.QueryType
+}
+
 func queryDefinition(v TemplateVariable) string {
 	if v.Definition != "" {
 		return v.Definition
 	}
-
 	if len(v.Query) == 0 {
 		return ""
 	}
 
-	// Try plain string first.
-	var s string
-	if err := json.Unmarshal(v.Query, &s); err == nil {
-		return s
+	var text string
+	if err := json.Unmarshal(v.Query, &text); err == nil {
+		return text
 	}
-
-	// Try object with "query" field.
-	var obj struct {
+	var object struct {
 		Query string `json:"query"`
 	}
-	if err := json.Unmarshal(v.Query, &obj); err == nil {
-		return obj.Query
+	if err := json.Unmarshal(v.Query, &object); err == nil {
+		return object.Query
 	}
 
 	return ""
+}
+
+func sortedResultRefIDs(result *QueryResult) []string {
+	refIDs := make([]string, 0, len(result.Results))
+	for refID := range result.Results {
+		refIDs = append(refIDs, refID)
+	}
+	slices.Sort(refIDs)
+
+	return refIDs
 }

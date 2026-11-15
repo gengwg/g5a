@@ -37,20 +37,22 @@ type view interface {
 type Options struct {
 	TimeRange      grafana.TimeRange
 	Refresh        time.Duration
+	RefreshSet     bool
 	DashboardUID   string // if set, open this dashboard directly
 	InitialPanelID int    // if set, jump to this panel
 }
 
 // App is the root Bubble Tea model that manages a view stack.
 type App struct {
-	client    *grafana.Client
-	views     []view
-	width     int
-	height    int
-	timeRange grafana.TimeRange
-	refresh   time.Duration
-	err       error
-	showHelp  bool
+	client     *grafana.Client
+	views      []view
+	width      int
+	height     int
+	timeRange  grafana.TimeRange
+	refresh    time.Duration
+	refreshSet bool
+	err        error
+	showHelp   bool
 }
 
 // Navigation and lifecycle messages.
@@ -63,8 +65,13 @@ type (
 	popAndSetVariablesMsg struct{ values map[string]string }
 	setVariablesMsg       struct{ values map[string]string }
 	variablesResolvedMsg  struct {
-		options  map[string][]string
-		defaults map[string]string
+		options    map[string][]string
+		defaults   map[string]string
+		generation int
+	}
+	variablesResolveErrorMsg struct {
+		err        error
+		generation int
 	}
 	errMsg         struct{ err error }
 	jumpToPanelMsg struct{ index int }
@@ -74,26 +81,38 @@ type (
 // initial view.
 func NewApp(client *grafana.Client, opts Options) *App {
 	app := &App{
-		client:    client,
-		views:     nil,
-		width:     80, //nolint:mnd // sensible default
-		height:    24, //nolint:mnd // sensible default
-		timeRange: opts.TimeRange,
-		refresh:   opts.Refresh,
-		err:       nil,
-		showHelp:  false,
+		client:     client,
+		views:      nil,
+		width:      80, //nolint:mnd // sensible default
+		height:     24, //nolint:mnd // sensible default
+		timeRange:  opts.TimeRange,
+		refresh:    opts.Refresh,
+		refreshSet: opts.RefreshSet,
+		err:        nil,
+		showHelp:   false,
 	}
 
 	if opts.DashboardUID != "" {
-		pv := newPanelView(client, opts.DashboardUID)
-		pv.timeRange = opts.TimeRange
-		pv.initialPanelID = opts.InitialPanelID
-		app.views = []view{newDashboardListView(client), pv}
+		dashboard := newDashboardView(client, opts.DashboardUID)
+		app.configureDashboardView(dashboard)
+		app.views = []view{newDashboardListView(client), dashboard}
+		if opts.InitialPanelID > 0 {
+			panel := newPanelView(client, opts.DashboardUID)
+			panel.initialPanelID = opts.InitialPanelID
+			app.views = append(app.views, panel)
+		}
 	} else {
 		app.views = []view{newDashboardListView(client)}
 	}
 
 	return app
+}
+
+func (a *App) configureDashboardView(dashboard *dashboardView) {
+	if a.refreshSet {
+		dashboard.refresh = a.refresh
+		dashboard.refreshSet = true
+	}
 }
 
 // Init returns initial commands for window size and the top view.
@@ -111,6 +130,8 @@ func (a *App) Init() tea.Cmd {
 }
 
 // Update handles messages for the App.
+//
+//nolint:cyclop // Bubble Tea message routing is centralized here
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -118,6 +139,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = msg.Height
 
 		return a, nil
+	case dashboardRefreshMsg:
+		return a.handleDashboardRefresh(msg)
 	case tea.KeyMsg:
 		return a.handleKeyMsg(msg)
 	case pushViewMsg:
@@ -135,6 +158,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return a.delegateToActiveView(msg)
 	}
+}
+
+func (a *App) handleDashboardRefresh(msg dashboardRefreshMsg) (tea.Model, tea.Cmd) {
+	commands := make([]tea.Cmd, 0)
+	for index, current := range a.views {
+		dashboard, ok := current.(*dashboardView)
+		if !ok {
+			continue
+		}
+		updated, command := dashboard.Update(msg)
+		a.views[index] = updated
+		if command != nil {
+			commands = append(commands, command)
+		}
+	}
+
+	return a, tea.Batch(commands...)
 }
 
 func (a *App) handleErr(msg errMsg) (tea.Model, tea.Cmd) {
@@ -167,8 +207,11 @@ func (a *App) handlePopAndForwardDynamic(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handlePushView pushes a new view onto the stack.
 func (a *App) handlePushView(msg pushViewMsg) (tea.Model, tea.Cmd) {
-	if pv, ok := msg.v.(*panelView); ok {
+	if pv, ok := msg.v.(*panelView); ok && !pv.preserveTimeRange {
 		pv.timeRange = a.timeRange
+	}
+	if dashboard, ok := msg.v.(*dashboardView); ok {
+		a.configureDashboardView(dashboard)
 	}
 
 	a.views = append(a.views, msg.v)
@@ -230,8 +273,15 @@ func (a *App) handlePopView() (tea.Model, tea.Cmd) {
 	a.views = a.views[:len(a.views)-1]
 
 	top := a.views[len(a.views)-1]
-	if dl, ok := top.(*dashboardListView); ok && !dl.loaded {
-		return a, dl.Init()
+	switch current := top.(type) {
+	case *dashboardListView:
+		if !current.loaded {
+			return a, current.Init()
+		}
+	case *dashboardView:
+		if current.dashboard == nil {
+			return a, current.Init()
+		}
 	}
 
 	return a, nil
@@ -284,14 +334,14 @@ func (a *App) renderHeader() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	urlStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
 			Light: "#666666",
-			Dark:  "#999999",
+			Dark:  colorLightMuted,
 		})
 
 	header := titleStyle.Render(" grafana-tui") +
@@ -300,7 +350,7 @@ func (a *App) renderHeader() string {
 	separator := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
 			Light: "#CCCCCC",
-			Dark:  "#555555",
+			Dark:  colorDarkBorder,
 		}).
 		Render(strings.Repeat("─", a.width))
 
@@ -312,7 +362,7 @@ func (a *App) renderFooter() string {
 	separator := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
 			Light: "#CCCCCC",
-			Dark:  "#555555",
+			Dark:  colorDarkBorder,
 		}).
 		Render(strings.Repeat("─", a.width))
 
@@ -326,15 +376,15 @@ func (a *App) renderFooter() string {
 func (a *App) renderBreadcrumbs() string {
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#999999",
-			Dark:  "#777777",
+			Light: colorLightMuted,
+			Dark:  colorDarkMuted,
 		})
 
 	boldStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	var parts []string
@@ -354,13 +404,13 @@ func (a *App) renderBreadcrumbs() string {
 func (a *App) renderHelpHints() string {
 	hintStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#999999",
-			Dark:  "#777777",
+			Light: colorLightMuted,
+			Dark:  colorDarkMuted,
 		})
 
 	keyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#555555",
+			Light: colorDarkBorder,
 			Dark:  "#BBBBBB",
 		})
 
@@ -385,13 +435,13 @@ func (a *App) renderHelp() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	keyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#555555",
+			Light: colorDarkBorder,
 			Dark:  "#BBBBBB",
 		}).
 		Width(15) //nolint:mnd // fixed column width for alignment
@@ -399,7 +449,7 @@ func (a *App) renderHelp() string {
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
 			Light: "#666666",
-			Dark:  "#999999",
+			Dark:  colorLightMuted,
 		})
 
 	var lines []string

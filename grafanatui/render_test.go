@@ -1,3 +1,4 @@
+//nolint:exhaustruct // renderer fixtures intentionally vary relevant fields only
 package grafanatui_test
 
 import (

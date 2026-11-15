@@ -1,6 +1,7 @@
 package grafanatui
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
@@ -22,7 +23,7 @@ type PanelRenderer interface {
 var rendererFactories = map[string]func() PanelRenderer{ //nolint:gochecknoglobals // registry is read-only after init
 	"timeseries":     newTimeSeriesRenderer,
 	"graph":          newTimeSeriesRenderer,
-	"stat":           newStatRenderer,
+	panelTypeStat:    newStatRenderer,
 	"gauge":          newGaugeRenderer,
 	"bargauge":       newGaugeRenderer,
 	"table":          newTableRenderer,
@@ -32,7 +33,7 @@ var rendererFactories = map[string]func() PanelRenderer{ //nolint:gochecknogloba
 	"text":           newTextRenderer,
 	"logs":           newTextRenderer,
 	"piechart":       newPiechartRenderer,
-	"alertlist":      newTextRenderer,
+	"alertlist":      newAlertListRenderer,
 	"dashlist":       newTextRenderer,
 	"state-timeline": newTimeSeriesRenderer,
 	"status-history": newTimeSeriesRenderer,
@@ -47,6 +48,7 @@ func newTableRenderer() PanelRenderer      { return &tableRenderer{} }
 func newBarChartRenderer() PanelRenderer   { return &barChartRenderer{} }
 func newHeatmapRenderer() PanelRenderer    { return &heatmapRenderer{} }
 func newTextRenderer() PanelRenderer       { return &textRenderer{} }
+func newAlertListRenderer() PanelRenderer  { return &alertListRenderer{} }
 
 // RendererForPanel returns the appropriate renderer for a panel type.
 // Unsupported types get a fallback renderer that shows a message.
@@ -58,7 +60,7 @@ func RendererForPanel(panelType string) PanelRenderer {
 	return &unsupportedRenderer{panelType: panelType}
 }
 
-// textRenderer renders text content.
+// textRenderer renders Markdown source as readable plain text.
 type textRenderer struct{}
 
 func (r *textRenderer) Render(
@@ -67,10 +69,30 @@ func (r *textRenderer) Render(
 	width, height int,
 	_ map[string]bool,
 ) string {
+	var options struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal(panel.Options, &options)
+	if options.Content == "" {
+		options.Content = "Text panel: " + panel.Title
+	}
+
+	return lipgloss.NewStyle().Width(width).Height(height).Render(options.Content)
+}
+
+// alertListRenderer is an explicit placeholder until alert browsing is added.
+type alertListRenderer struct{}
+
+func (r *alertListRenderer) Render(
+	_ *grafana.QueryResult,
+	_ grafana.Panel,
+	width, height int,
+	_ map[string]bool,
+) string {
 	return lipgloss.Place(
 		width, height,
 		lipgloss.Center, lipgloss.Center,
-		"Text panel: "+panel.Title,
+		"Alert-list rendering is not implemented yet",
 	)
 }
 

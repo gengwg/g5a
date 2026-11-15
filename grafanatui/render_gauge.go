@@ -146,7 +146,7 @@ func timeSeriesGaugeEntries(frame *grafana.DataFrame) []gaugeEntry {
 	var entries []gaugeEntry
 
 	for fieldIdx, field := range frame.Schema.Fields {
-		if field.Type != "number" {
+		if field.Type != fieldTypeNumber {
 			continue
 		}
 
@@ -168,7 +168,7 @@ func numericGaugeEntries(frame *grafana.DataFrame) []gaugeEntry {
 	var entries []gaugeEntry
 
 	for fieldIdx, field := range frame.Schema.Fields {
-		if field.Type != "number" {
+		if field.Type != fieldTypeNumber {
 			continue
 		}
 

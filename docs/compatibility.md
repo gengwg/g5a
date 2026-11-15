@@ -1,0 +1,93 @@
+# Grafana compatibility
+
+`grafana-tui` aims for operational fidelity: values, mapped states, colors, table rows, and layout should remain meaningful in a terminal. It does not attempt pixel-perfect browser rendering or complete Grafana plugin compatibility.
+
+Unsupported transformations and panel types are shown explicitly rather than silently presented as healthy data.
+
+## Dashboard model and APIs
+
+- Classic dashboard JSON from `GET /api/dashboards/uid/:uid`.
+- Dashboard search through `GET /api/search`.
+- Panel and variable queries through Grafana's backend APIs, primarily `POST /api/ds/query`.
+- Grafana versions that retain these legacy read APIs. Grafana 13 deprecates some `/api` routes but keeps them operational.
+- The newer `/apis/dashboard.grafana.app` v1/v2 endpoints are not yet used directly.
+
+## Datasources
+
+Prometheus is covered by unit and real Grafana integration tests. Other backend datasources are forwarded with their raw datasource-specific target fields preserved, but do not yet have dedicated integration coverage.
+
+Legacy timeseries targets without explicit `instant` or `range` fields default to range queries. Explicit `instant`, `range`, `format`, `intervalMs`, and `maxDataPoints` values are preserved. Relative Grafana time expressions and `/s` through `/y` rounding are supported; unsupported expressions produce a visible error instead of silently using the current time.
+
+## Variables
+
+| Feature | Status |
+|---------|--------|
+| Datasource variables | Supported, including type/regex filtering |
+| Custom and constant variables | Supported |
+| Prometheus `label_values` | Supported |
+| `query_result` and raw instant queries | Supported |
+| Datasource-native `queryType` variables (for example Incident `labels`/`severities`) | Supported |
+| Dependent variables | Resolved in dashboard order |
+| Regex extraction | Supported, including the first capture group |
+| Multi-value and All | Supported, including repeat expansion |
+| Raw, pipe, regex, CSV, JSON, query-param formatting | Supported |
+| Saved multi-value selections | Supported |
+| Dashboard schema v2 variables/layout | Not directly supported yet |
+
+## Repeated panels and layout
+
+- Classic `gridPos` layout on a 24-column grid.
+- Horizontal and vertical panel repeats with scoped variable values.
+- `repeatDirection` and `maxPerRow`.
+- Repeated rows, tabs, AutoGrid, library panels, and schema v2 layouts are not yet implemented.
+- Narrow terminals reduce repeated-panel columns and scroll vertically.
+
+## Panel types
+
+First-class support for the current dashboard viewer:
+
+| Panel | Behavior |
+|-------|----------|
+| `stat` | Reductions, mappings, thresholds, units, labels, foreground/background colors |
+| `table` | Typed cells, sorting, mappings, thresholds, units, per-column overrides, truncation |
+| `timeseries` / legacy `graph` | Braille lines, duplicate-name handling, units, Last/Max and other basic legend calculations |
+
+Existing best-effort renderers also cover `gauge`, `bargauge`, `barchart`, `heatmap`, `histogram`, `piechart`, `state-timeline`, `status-history`, `candlestick`, `trend`, and `logs`. Their Grafana option coverage is more limited.
+
+Text and alert-list panels remain visible in navigation. Alert-list content is currently a placeholder; native alert browsing and acknowledgement are future work and are intentionally separate from dashboard querying.
+
+## Transformations
+
+- `joinByField` with outer joins across frames and refIDs, including joins on Prometheus labels.
+- Label-backed series are expanded into per-series frames before transformation so labels remain aligned with their values.
+- `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and `emptyValue`.
+- `sortBy` with ordered field rules and numeric-aware stable sorting.
+- `merge` with field-name alignment and null padding for missing fields.
+- `filterFieldsByName`.
+- `organize`, including exclusions, renaming, and `indexByName` ordering.
+- `filterByValue`.
+- `convertFieldType` for string-to-number conversion.
+- `reduce` with common reducers.
+
+Unknown transformation IDs produce a visible warning in the affected panel. Other transformation types are not yet implemented.
+
+## Field presentation
+
+- DataFrame `field.Config`, panel defaults, and ordered `byName` / `byRegexp` overrides.
+- Display names, datasource `displayNameFromDS`, and `${__field.labels.name}` interpolation.
+- Units, decimals, no-value text, min/max, and absolute/percentage thresholds.
+- DataFrame time fields rendered as local timestamps.
+- Value, range, regex, null, and NaN mappings.
+- Mapping colors, threshold colors, and color-background cells.
+- Table alignment and width hints.
+
+Grafana's complete field-override matcher set, color schemes, data links, and every visualization-specific option are not yet covered.
+
+## Refresh and failures
+
+- Dashboard refresh interval, or 30 seconds when unspecified.
+- Explicit CLI interval overrides and `--refresh=0` to disable polling.
+- Bounded panel-query concurrency and cancellation on new refreshes.
+- Stale responses cannot overwrite newer variable/time selections.
+- One failed panel does not clear other panels.
+- Unsupported features are shown as warnings or placeholders, never silently treated as healthy values.

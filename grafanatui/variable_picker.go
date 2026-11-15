@@ -3,6 +3,7 @@ package grafanatui
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -134,7 +135,7 @@ func (v *variablePickerView) enterEditMode() (view, tea.Cmd) {
 	// Include "All" option at position 0 if the variable supports
 	// it.
 	if v.variables[v.varCursor].IncludeAll {
-		if currentVal == ".*" || currentVal == v.variables[v.varCursor].AllValue {
+		if currentVal == allOptionValue || currentVal == ".*" || currentVal == v.variables[v.varCursor].AllValue {
 			v.optCursor = 0
 		} else {
 			v.optCursor++ // shift by 1 for the "All" entry
@@ -147,6 +148,8 @@ func (v *variablePickerView) enterEditMode() (view, tea.Cmd) {
 }
 
 // handleOptionKeyMsg handles keys in the option selection mode.
+//
+//nolint:cyclop // option keyboard routing includes single and multi-select controls
 func (v *variablePickerView) handleOptionKeyMsg(
 	msg tea.KeyMsg,
 ) (view, tea.Cmd) {
@@ -171,6 +174,10 @@ func (v *variablePickerView) handleOptionKeyMsg(
 		}
 	case keyEnter:
 		return v.selectOption(opts)
+	case " ":
+		if v.variables[v.varCursor].Multi {
+			v.toggleOption(opts[v.optCursor])
+		}
 	case keyEsc:
 		v.editing = false
 		v.optCursor = 0
@@ -207,14 +214,16 @@ func (v *variablePickerView) selectOption(
 	}
 
 	variable := v.variables[v.varCursor]
+	if variable.Multi {
+		v.editing = false
+		v.optCursor = 0
+		v.optOffset = 0
+		return v, nil
+	}
 	selected := opts[v.optCursor]
 
 	if selected == allOptionValue {
-		if variable.AllValue != "" {
-			v.values[variable.Name] = variable.AllValue
-		} else {
-			v.values[variable.Name] = ".*"
-		}
+		v.values[variable.Name] = allOptionValue
 	} else {
 		v.values[variable.Name] = selected
 	}
@@ -224,6 +233,55 @@ func (v *variablePickerView) selectOption(
 	v.optOffset = 0
 
 	return v, nil
+}
+
+func (v *variablePickerView) toggleOption(selected string) {
+	variable := v.variables[v.varCursor]
+	if selected == allOptionValue {
+		v.values[variable.Name] = allOptionValue
+		return
+	}
+
+	selectedValues := variableSelectedValues(v.values[variable.Name])
+	found := false
+	values := make([]string, 0, len(selectedValues)+1)
+	for _, value := range selectedValues {
+		if value == selected {
+			found = true
+			continue
+		}
+		values = append(values, value)
+	}
+	if !found {
+		values = append(values, selected)
+	}
+	v.values[variable.Name] = strings.Join(values, ",")
+}
+
+func variableSelectedValues(current string) []string {
+	if current == "" || current == allOptionValue || current == ".*" {
+		return []string{}
+	}
+
+	parts := strings.Split(current, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+
+	return values
+}
+
+func (v *variablePickerView) optionSelected(variable grafana.TemplateVariable, option string) bool {
+	current := v.values[variable.Name]
+	if option == allOptionValue {
+		return current == allOptionValue || current == ".*" ||
+			(variable.AllValue != "" && current == variable.AllValue)
+	}
+
+	return slices.Contains(variableSelectedValues(current), option)
 }
 
 func (v *variablePickerView) View(width, height int) string {
@@ -241,21 +299,21 @@ func (v *variablePickerView) renderVariables(_ int) string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#999999",
-			Dark:  "#777777",
+			Light: colorLightMuted,
+			Dark:  colorDarkMuted,
 		})
 
 	cursorStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#000000",
-			Dark:  "#FFFFFF",
+			Light: colorBlack,
+			Dark:  colorWhite,
 		})
 
 	valueStyle := lipgloss.NewStyle().
@@ -313,21 +371,21 @@ func (v *variablePickerView) renderOptions(_ int) string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#999999",
-			Dark:  "#777777",
+			Light: colorLightMuted,
+			Dark:  colorDarkMuted,
 		})
 
 	cursorStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#000000",
-			Dark:  "#FFFFFF",
+			Light: colorBlack,
+			Dark:  colorWhite,
 		})
 
 	variable := v.variables[v.varCursor]
@@ -335,8 +393,13 @@ func (v *variablePickerView) renderOptions(_ int) string {
 
 	lines := []string{
 		titleStyle.Render(
-			fmt.Sprintf("  %s (enter: select, esc: back)", variable.Name),
+			fmt.Sprintf("  %s (space: toggle, enter: done, esc: back)", variable.Name),
 		),
+	}
+	if !variable.Multi {
+		lines[0] = titleStyle.Render(
+			fmt.Sprintf("  %s (enter: select, esc: back)", variable.Name),
+		)
 	}
 
 	end := min(v.optOffset+v.height, len(opts))
@@ -349,9 +412,7 @@ func (v *variablePickerView) renderOptions(_ int) string {
 			display = "All"
 		}
 
-		currentVal := v.values[variable.Name]
-		isSelected := opt == currentVal ||
-			(opt == allOptionValue && (currentVal == ".*" || currentVal == variable.AllValue))
+		isSelected := v.optionSelected(variable, opt)
 
 		prefix := "  "
 		if isSelected {
@@ -383,20 +444,28 @@ func (v *variablePickerView) IsFiltering() bool { return false }
 
 func (v *variablePickerView) KeyBindings() []key.Binding {
 	if v.editing {
-		return []key.Binding{
+		bindings := []key.Binding{
 			key.NewBinding(
 				key.WithKeys("j", "k"),
 				key.WithHelp("j/k", "navigate"),
 			),
 			key.NewBinding(
 				key.WithKeys(keyEnter),
-				key.WithHelp(keyEnter, "select"),
+				key.WithHelp(keyEnter, "done"),
 			),
 			key.NewBinding(
 				key.WithKeys(keyEsc),
 				key.WithHelp(keyEsc, "back"),
 			),
 		}
+		if v.varCursor < len(v.variables) && v.variables[v.varCursor].Multi {
+			bindings = append(bindings, key.NewBinding(
+				key.WithKeys(" "),
+				key.WithHelp("space", "toggle"),
+			))
+		}
+
+		return bindings
 	}
 
 	return []key.Binding{

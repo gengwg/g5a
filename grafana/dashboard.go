@@ -24,6 +24,7 @@ type Dashboard struct {
 	Panels     []Panel       `json:"panels"`
 	Templating Templating    `json:"templating"`
 	Time       DashboardTime `json:"time"`
+	Refresh    string        `json:"refresh"`
 }
 
 // Panel represents a single panel within a dashboard.
@@ -38,6 +39,9 @@ type Panel struct {
 	Options         json.RawMessage  `json:"options,omitempty"`
 	Panels          []Panel          `json:"panels,omitempty"`
 	Transformations []Transformation `json:"transformations,omitempty"`
+	Repeat          string           `json:"repeat,omitempty"`
+	RepeatDirection string           `json:"repeatDirection,omitempty"`
+	MaxPerRow       int              `json:"maxPerRow,omitempty"`
 }
 
 // Transformation represents a single panel data transformation.
@@ -165,6 +169,10 @@ type TemplateVariable struct {
 	Query      json.RawMessage          `json:"query,omitempty"`
 	Datasource *DatasourceRef           `json:"datasource,omitempty"`
 	Options    []TemplateVariableOption `json:"options,omitempty"`
+	Regex      string                   `json:"regex,omitempty"`
+	Sort       int                      `json:"sort,omitempty"`
+	Refresh    int                      `json:"refresh,omitempty"`
+	Hide       int                      `json:"hide,omitempty"`
 }
 
 // TemplateVariableOption represents a selectable option for a
@@ -228,11 +236,6 @@ func (c *Client) GetDashboard(
 // skipPanelTypes lists panel types that are not useful in terminal
 // mode and should be excluded from navigation.
 var skipPanelTypes = map[string]bool{ //nolint:gochecknoglobals // read-only set
-	"row":                true,
-	"text":               true,
-	"dashlist":           true,
-	"alertlist":          true,
-	"news":               true,
 	"innius-video-panel": true,
 }
 

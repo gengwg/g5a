@@ -2,6 +2,7 @@ package grafana
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"regexp"
@@ -11,26 +12,288 @@ import (
 
 // ApplyTransformations applies a panel's transformations to its query
 // result, modifying data frames in place.
+//
+//nolint:cyclop // transformation dispatch is centralized here
 func ApplyTransformations(
 	result *QueryResult,
 	transformations []Transformation,
 ) {
+	materializeLabelFields(result)
 	for _, t := range transformations {
 		switch t.ID {
 		case "filterFieldsByName":
 			applyFilterFieldsByName(result, t.Options)
 		case "organize":
 			applyOrganize(result, t.Options)
+		case "joinByField":
+			applyJoinByField(result, t.Options)
 		case "filterByValue":
 			applyFilterByValue(result, t.Options)
 		case "convertFieldType":
 			applyConvertFieldType(result, t.Options)
 		case "reduce":
 			applyReduce(result, t.Options)
+		case "groupingToMatrix":
+			applyGroupingToMatrix(result, t.Options)
+		case "sortBy":
+			applySortBy(result, t.Options)
+		case "merge":
+			applyMerge(result)
 		default:
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("unsupported transformation %q", t.ID))
 			slog.Debug("unsupported transformation, skipping",
 				"id", t.ID)
 		}
+	}
+}
+
+// joinByFieldOptions is the options for the joinByField transformation.
+type joinByFieldOptions struct {
+	ByField string `json:"byField"`
+	Mode    string `json:"mode"`
+}
+
+type dataFrameJoin struct {
+	byField      string
+	frame        DataFrame
+	columns      [][]any
+	rowIndexes   map[string]int
+	sourceRefIDs []string
+	keyFieldSet  bool
+}
+
+func applyJoinByField(result *QueryResult, raw json.RawMessage) {
+	var opts joinByFieldOptions
+	if err := json.Unmarshal(raw, &opts); err != nil {
+		slog.Debug("failed to parse joinByField options", "error", err)
+		return
+	}
+
+	if opts.ByField == "" {
+		return
+	}
+
+	if opts.Mode != "" && opts.Mode != "outer" {
+		slog.Debug("unsupported joinByField mode, skipping", "mode", opts.Mode)
+		return
+	}
+
+	refIDs := make([]string, 0, len(result.Results))
+	for refID := range result.Results {
+		refIDs = append(refIDs, refID)
+	}
+
+	if len(refIDs) == 0 {
+		return
+	}
+
+	slices.Sort(refIDs)
+
+	join := newDataFrameJoin(opts.ByField, refIDs[0])
+
+	for _, refID := range refIDs {
+		rd := result.Results[refID]
+		for i := range rd.Frames {
+			join.addFrame(&rd.Frames[i], refID)
+		}
+	}
+
+	result.Results = map[string]QueryResultData{
+		refIDs[0]: {Frames: []DataFrame{join.dataFrame()}}, //nolint:exhaustruct // no query error metadata
+	}
+}
+
+func newDataFrameJoin(byField, refID string) *dataFrameJoin {
+	keyField := DataFrameField{
+		Name: byField, Type: "", Labels: nil, Config: nil,
+	}
+
+	return &dataFrameJoin{
+		byField: byField,
+		frame: DataFrame{
+			Schema: DataFrameSchema{
+				RefID:  refID,
+				Meta:   DataFrameMeta{Type: "", TypeVersion: nil},
+				Fields: []DataFrameField{keyField},
+			},
+			Data: DataFrameData{Values: nil},
+		},
+		columns:      [][]any{{}},
+		rowIndexes:   make(map[string]int),
+		sourceRefIDs: []string{""},
+		keyFieldSet:  false,
+	}
+}
+
+func (j *dataFrameJoin) addFrame(frame *DataFrame, resultRefID string) {
+	inputColumns := parseAllColumns(frame)
+	keyIdx := findFieldIndex(frame, j.byField)
+	if keyIdx >= 0 && keyIdx < len(inputColumns) {
+		j.addFrameWithKeys(
+			frame,
+			inputColumns,
+			frame.Schema.Fields[keyIdx],
+			inputColumns[keyIdx],
+			resultRefID,
+		)
+		return
+	}
+
+	// A wide frame can hold several series with different values for the
+	// same join label. Split those series before joining so each field keeps
+	// its own label/value association.
+	for fieldIdx, field := range frame.Schema.Fields {
+		labelValue, exists := field.Labels[j.byField]
+		if !exists || fieldIdx >= len(inputColumns) {
+			continue
+		}
+		narrowFields := make([]DataFrameField, 0, 2)
+		narrowColumns := make([][]any, 0, 2)
+		for index, candidate := range frame.Schema.Fields {
+			if candidate.Type == fieldTypeTime && index < len(inputColumns) {
+				narrowFields = append(narrowFields, candidate)
+				narrowColumns = append(narrowColumns, inputColumns[index])
+			}
+		}
+		narrowFields = append(narrowFields, field)
+		narrowColumns = append(narrowColumns, inputColumns[fieldIdx])
+		narrowFrame := &DataFrame{
+			Schema: DataFrameSchema{RefID: frame.Schema.RefID, Meta: frame.Schema.Meta, Fields: narrowFields},
+			Data:   DataFrameData{Values: rawColumns(narrowColumns)},
+		}
+		keyValues := make([]any, len(inputColumns[fieldIdx]))
+		for index := range keyValues {
+			keyValues[index] = labelValue
+		}
+		j.addFrameWithKeys(
+			narrowFrame,
+			narrowColumns,
+			DataFrameField{Name: j.byField, Type: fieldTypeString, Labels: nil, Config: nil},
+			keyValues,
+			resultRefID,
+		)
+	}
+}
+
+func (j *dataFrameJoin) addFrameWithKeys(
+	frame *DataFrame,
+	inputColumns [][]any,
+	keyField DataFrameField,
+	keyValues []any,
+	resultRefID string,
+) {
+	if !j.keyFieldSet {
+		j.frame.Schema.Fields[0] = keyField
+		j.keyFieldSet = true
+	}
+
+	refID := frame.Schema.RefID
+	if refID == "" {
+		refID = resultRefID
+	}
+	columnIndexes := j.addColumns(frame, inputColumns, refID)
+	for rowIdx, keyValue := range keyValues {
+		j.addRow(keyValue, rowIdx, inputColumns, columnIndexes)
+	}
+}
+
+func rawColumns(columns [][]any) []json.RawMessage {
+	values := make([]json.RawMessage, len(columns))
+	for index, column := range columns {
+		values[index] = mustMarshal(column)
+	}
+
+	return values
+}
+
+func (j *dataFrameJoin) addColumns(
+	frame *DataFrame, inputColumns [][]any, refID string,
+) map[int]int {
+	columnIndexes := make(map[int]int, len(frame.Schema.Fields)-1)
+
+	for fieldIdx, field := range frame.Schema.Fields {
+		if field.Name == j.byField || fieldIdx >= len(inputColumns) {
+			continue
+		}
+
+		column := make([]any, len(j.columns[0]))
+		j.columns = append(j.columns, column)
+		j.frame.Schema.Fields = append(j.frame.Schema.Fields, field)
+		j.sourceRefIDs = append(j.sourceRefIDs, refID)
+		columnIndexes[fieldIdx] = len(j.columns) - 1
+	}
+
+	return columnIndexes
+}
+
+func (j *dataFrameJoin) addRow(
+	keyValue any, sourceRow int, inputColumns [][]any,
+	columnIndexes map[int]int,
+) {
+	key := joinRowKey(keyValue)
+	joinedRow, ok := j.rowIndexes[key]
+
+	if !ok {
+		joinedRow = len(j.columns[0])
+		j.rowIndexes[key] = joinedRow
+
+		for columnIdx := range j.columns {
+			j.columns[columnIdx] = append(j.columns[columnIdx], nil)
+		}
+
+		j.columns[0][joinedRow] = keyValue
+	}
+
+	for fieldIdx, columnIdx := range columnIndexes {
+		if sourceRow < len(inputColumns[fieldIdx]) {
+			j.columns[columnIdx][joinedRow] = inputColumns[fieldIdx][sourceRow]
+		}
+	}
+}
+
+func (j *dataFrameJoin) dataFrame() DataFrame {
+	nameCounts := make(map[string]int, len(j.frame.Schema.Fields))
+	for _, field := range j.frame.Schema.Fields[1:] {
+		nameCounts[field.Name]++
+	}
+
+	usedNames := make(map[string]int, len(j.frame.Schema.Fields))
+	for i := 1; i < len(j.frame.Schema.Fields); i++ {
+		field := &j.frame.Schema.Fields[i]
+		if nameCounts[field.Name] == 1 {
+			continue
+		}
+		baseName := field.Name + " #" + j.sourceRefIDs[i]
+		field.Name = baseName
+		if usedNames[baseName] > 0 {
+			field.Name = baseName + "-" + strconv.Itoa(usedNames[baseName]+1)
+		}
+		usedNames[baseName]++
+	}
+
+	j.frame.Data.Values = make([]json.RawMessage, len(j.columns))
+	for i, column := range j.columns {
+		j.frame.Data.Values[i] = mustMarshal(column)
+	}
+
+	return j.frame
+}
+
+func joinRowKey(value any) string {
+	switch value := value.(type) {
+	case nil:
+		return "null"
+	case string:
+		return "string:" + value
+	case float64:
+		if value == 0 {
+			value = 0 // Normalize negative zero.
+		}
+
+		return "number:" + strconv.FormatFloat(value, 'g', -1, 64)
+	default:
+		return "other:" + string(mustMarshal(value))
 	}
 }
 
@@ -105,6 +368,7 @@ func matchesFieldName(name string, matcher *fieldNameMatcher) bool {
 type organizeOptions struct {
 	ExcludeByName map[string]bool   `json:"excludeByName,omitempty"`
 	RenameByName  map[string]string `json:"renameByName,omitempty"`
+	IndexByName   map[string]int    `json:"indexByName,omitempty"`
 }
 
 func applyOrganize(result *QueryResult, raw json.RawMessage) {
@@ -139,8 +403,69 @@ func organizeFrame(frame *DataFrame, opts *organizeOptions) {
 	for i, field := range frame.Schema.Fields {
 		if newName, ok := opts.RenameByName[field.Name]; ok && newName != "" {
 			frame.Schema.Fields[i].Name = newName
+			frame.Schema.Fields[i].Config = withoutDatasourceDisplayName(field.Config)
 		}
 	}
+
+	if len(opts.IndexByName) > 0 {
+		orderFrameFields(frame, opts.IndexByName)
+	}
+}
+
+func withoutDatasourceDisplayName(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return raw
+	}
+	delete(config, "displayNameFromDS")
+	updated, err := json.Marshal(config)
+	if err != nil {
+		return raw
+	}
+
+	return updated
+}
+
+//nolint:cyclop // organize ordering handles sparse indices and unspecified fields
+func orderFrameFields(frame *DataFrame, indexByName map[string]int) {
+	order := make([]int, len(frame.Schema.Fields))
+	for i := range order {
+		order[i] = i
+	}
+
+	slices.SortStableFunc(order, func(a, b int) int {
+		aIndex, aIndexed := indexByName[frame.Schema.Fields[a].Name]
+		bIndex, bIndexed := indexByName[frame.Schema.Fields[b].Name]
+
+		switch {
+		case aIndexed && bIndexed && aIndex < bIndex:
+			return -1
+		case aIndexed && bIndexed && aIndex > bIndex:
+			return 1
+		case aIndexed && !bIndexed:
+			return -1
+		case !aIndexed && bIndexed:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	fields := make([]DataFrameField, 0, len(order))
+	values := make([]json.RawMessage, 0, len(frame.Data.Values))
+
+	for _, fieldIdx := range order {
+		fields = append(fields, frame.Schema.Fields[fieldIdx])
+		if fieldIdx < len(frame.Data.Values) {
+			values = append(values, frame.Data.Values[fieldIdx])
+		}
+	}
+
+	frame.Schema.Fields = fields
+	frame.Data.Values = values
 }
 
 // convertFieldTypeOptions is the options for the convertFieldType
@@ -546,7 +871,7 @@ func reduceSeriesToRows(frame *DataFrame, opts reduceOptions) {
 	valuesJSON := mustMarshal(reducedValues)
 
 	frame.Schema.Fields = []DataFrameField{
-		{Name: "Field", Type: "string"},            //nolint:exhaustruct // no labels/config
+		{Name: "Field", Type: fieldTypeString},     //nolint:exhaustruct // no labels/config
 		{Name: reducerName, Type: fieldTypeNumber}, //nolint:exhaustruct // no labels/config
 	}
 	frame.Data.Values = []json.RawMessage{namesJSON, valuesJSON}
@@ -577,7 +902,7 @@ func applyReducer(values []float64, reducer string) float64 {
 }
 
 func reduceLastValue(values []float64) float64 {
-	for i := len(values) - 1; i >= 0; i-- {
+	for i := range slices.Backward(values) {
 		if !math.IsNaN(values[i]) {
 			return values[i]
 		}

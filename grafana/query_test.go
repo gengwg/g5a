@@ -1,120 +1,169 @@
+//nolint:cyclop,exhaustruct // API fixtures intentionally vary relevant fields only
 package grafana_test
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lovromazgon/grafana-tui/grafana"
 )
 
-//nolint:exhaustruct // test data intentionally omits fields
-func TestQueryPanel_ProxyEndpoint(t *testing.T) {
+func TestQueryPanel_GenericEndpoint(t *testing.T) {
 	t.Parallel()
 
-	var gotQueryParams map[string]string
-
-	server := newProxyServer(t, &gotQueryParams)
+	var request struct {
+		From    string            `json:"from"`
+		To      string            `json:"to"`
+		Queries []json.RawMessage `json:"queries"`
+	}
+	server := newDSQueryServer(t, &request)
 	defer server.Close()
 
 	client, err := grafana.NewClient(
-		server.URL, grafana.WithHTTPClient(server.Client()),
+		server.URL,
+		grafana.WithHTTPClient(server.Client()),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	panel := grafana.Panel{
-		ID:   1,
-		Type: "timeseries",
-		Datasource: &grafana.DatasourceRef{
-			UID:  "prom1",
-			Type: "prometheus",
-		},
+		ID:         1,
+		Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
 		Targets: []grafana.Target{
 			mustUnmarshalTarget(t,
-				`{"refId":"A","expr":"up","datasource":{"uid":"prom1","type":"prometheus"}}`),
+				`{"refId":"A","expr":"up","instant":true,"range":false,"format":"table",`+
+					`"datasource":{"uid":"prom1","type":"prometheus"}}`),
 		},
 	}
-
-	timeRange := grafana.TimeRange{
-		From: "1700000000000",
-		To:   "1700003600000",
-	}
-
 	result, err := client.QueryPanel(
-		t.Context(), panel, timeRange, 100, nil, nil, nil,
+		t.Context(),
+		panel,
+		grafana.TimeRange{From: "1700000000000", To: "1700003600000"},
+		100,
+		nil,
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if gotQueryParams["query"] != "up" {
-		t.Errorf("query = %q, want %q", gotQueryParams["query"], "up")
+	if _, ok := result.Results["A"]; !ok {
+		t.Fatal("expected result for refId A")
+	}
+	if request.From != "1700000000000" || request.To != "1700003600000" {
+		t.Errorf("time range = %s..%s", request.From, request.To)
+	}
+	if len(request.Queries) != 1 {
+		t.Fatalf("got %d queries, want 1", len(request.Queries))
 	}
 
-	if _, ok := result.Results["A"]; !ok {
-		t.Error("expected result for refId A")
+	var target map[string]any
+	if err := json.Unmarshal(request.Queries[0], &target); err != nil {
+		t.Fatal(err)
+	}
+	if target["expr"] != "up" || target["format"] != "table" {
+		t.Errorf("target fields were not preserved: %v", target)
+	}
+	if target["instant"] != true || target["range"] != false {
+		t.Errorf("instant/range semantics were not preserved: %v", target)
+	}
+	if target["maxDataPoints"] != float64(100) {
+		t.Errorf("maxDataPoints = %v, want 100", target["maxDataPoints"])
 	}
 }
 
-//nolint:exhaustruct // test data intentionally omits fields
 func TestQueryPanel_VariableResolution(t *testing.T) {
 	t.Parallel()
 
-	var gotQueryParams map[string]string
-
-	server := newProxyServer(t, &gotQueryParams)
+	var request struct {
+		Queries []json.RawMessage `json:"queries"`
+	}
+	server := newDSQueryServer(t, &request)
 	defer server.Close()
 
 	client, err := grafana.NewClient(
-		server.URL, grafana.WithHTTPClient(server.Client()),
+		server.URL,
+		grafana.WithHTTPClient(server.Client()),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	panel := grafana.Panel{
-		ID:   1,
-		Type: "timeseries",
-		Datasource: &grafana.DatasourceRef{
-			UID:  "prom1",
-			Type: "prometheus",
-		},
+		ID:         1,
+		Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
 		Targets: []grafana.Target{
 			mustUnmarshalTarget(t,
-				`{"refId":"A","expr":"up{instance=\"$instance\"}","datasource":{"uid":"prom1","type":"prometheus"}}`),
+				`{"refId":"A","expr":"up{instance=\"$instance\"}",`+
+					`"datasource":{"uid":"prom1","type":"prometheus"}}`),
 		},
 	}
-
-	variables := []grafana.TemplateVariable{
-		{
-			Name: "instance",
-			Type: "query",
-			Current: grafana.TemplateVariableCurrent{
-				Text:  json.RawMessage(`"localhost"`),
-				Value: json.RawMessage(`"localhost:9090"`),
-			},
+	variables := []grafana.TemplateVariable{{
+		Name: "instance",
+		Type: "query",
+		Current: grafana.TemplateVariableCurrent{
+			Text:  json.RawMessage(`"localhost"`),
+			Value: json.RawMessage(`"localhost:9090"`),
 		},
-	}
-
-	timeRange := grafana.TimeRange{From: "now-1h", To: "now"}
+	}}
 
 	_, err = client.QueryPanel(
-		t.Context(), panel, timeRange, 100, variables, nil, nil,
+		t.Context(),
+		panel,
+		grafana.TimeRange{From: "now-1h", To: "now"},
+		100,
+		variables,
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
+	var target map[string]any
+	if err := json.Unmarshal(request.Queries[0], &target); err != nil {
+		t.Fatal(err)
+	}
 	want := `up{instance="localhost:9090"}`
-	if gotQueryParams["query"] != want {
-		t.Errorf("query = %q, want %q", gotQueryParams["query"], want)
+	if target["expr"] != want {
+		t.Errorf("query = %q, want %q", target["expr"], want)
 	}
 }
 
-//nolint:exhaustruct // test data intentionally omits fields
+func TestQueryPanel_HiddenTarget(t *testing.T) {
+	t.Parallel()
+
+	var request struct {
+		Queries []json.RawMessage `json:"queries"`
+	}
+	server := newDSQueryServer(t, &request)
+	defer server.Close()
+
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	panel := grafana.Panel{
+		Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+		Targets: []grafana.Target{
+			mustUnmarshalTarget(t, `{"refId":"A","expr":"up","hide":true}`),
+			mustUnmarshalTarget(t, `{"refId":"B","expr":"up"}`),
+		},
+	}
+	_, err = client.QueryPanel(
+		t.Context(), panel, grafana.TimeRange{From: "now-1h", To: "now"},
+		100, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Queries) != 1 {
+		t.Fatalf("got %d queries, want only the visible target", len(request.Queries))
+	}
+}
+
 func TestQueryPanel_EmptyTargets(t *testing.T) {
 	t.Parallel()
 
@@ -122,58 +171,90 @@ func TestQueryPanel_EmptyTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	panel := grafana.Panel{
-		ID:      1,
-		Type:    "timeseries",
-		Targets: nil,
-	}
-
 	result, err := client.QueryPanel(
-		t.Context(), panel,
-		grafana.TimeRange{From: "now-1h", To: "now"}, 100, nil, nil, nil,
+		t.Context(),
+		grafana.Panel{ID: 1, Type: "timeseries"},
+		grafana.TimeRange{From: "now-1h", To: "now"},
+		100,
+		nil,
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if len(result.Results) != 0 {
 		t.Errorf("expected empty results, got %d", len(result.Results))
 	}
 }
 
-// newProxyServer creates a test server that handles both datasource
-// lookup and the Prometheus proxy query_range endpoint.
-func newProxyServer(
+func TestQueryPanel_UnresolvedDatasource(t *testing.T) {
+	t.Parallel()
+
+	client, err := grafana.NewClient("http://unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	panel := grafana.Panel{
+		Datasource: &grafana.DatasourceRef{UID: "${DS_INCIDENT}", Type: "grafana-incident-datasource"},
+		Targets: []grafana.Target{
+			mustUnmarshalTarget(t, `{"refId":"A","queryType":"incidents"}`),
+		},
+	}
+	_, err = client.QueryPanel(
+		t.Context(), panel, grafana.TimeRange{From: "now-1h", To: "now"},
+		100, nil, nil, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "unresolved datasource") {
+		t.Fatalf("expected unresolved datasource error, got %v", err)
+	}
+}
+
+func TestQueryPanel_InvalidTimeRange(t *testing.T) {
+	t.Parallel()
+
+	client, err := grafana.NewClient("http://unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.QueryPanel(
+		t.Context(),
+		grafana.Panel{ID: 1, Type: "timeseries"},
+		grafana.TimeRange{From: "yesterday", To: "now"},
+		100,
+		nil,
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported time range") {
+		t.Fatalf("expected unsupported time range error, got %v", err)
+	}
+}
+
+func newDSQueryServer(
 	t *testing.T,
-	gotParams *map[string]string,
+	request any,
 ) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			switch {
-			case r.Method == http.MethodGet &&
-				r.URL.Path == "/api/datasources/proxy/uid/prom1/api/v1/query_range":
-				*gotParams = map[string]string{
-					"query": r.URL.Query().Get("query"),
-					"start": r.URL.Query().Get("start"),
-					"end":   r.URL.Query().Get("end"),
-					"step":  r.URL.Query().Get("step"),
+			case r.Method == http.MethodGet && r.URL.Path == "/api/datasources":
+				_, _ = w.Write([]byte(`[{"uid":"prom1","name":"Prometheus","type":"prometheus"}]`))
+			case r.Method == http.MethodPost && r.URL.Path == "/api/ds/query":
+				if err := json.NewDecoder(r.Body).Decode(request); err != nil {
+					t.Errorf("decoding request: %v", err)
 				}
-
-				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{
-					"status": "success",
-					"data": {
-						"resultType": "matrix",
-						"result": [{
-							"metric": {"__name__": "up", "instance": "localhost:9090"},
-							"values": [[1700000000, "1"], [1700000060, "1"]]
-						}]
-					}
+					"results":{"A":{"frames":[{
+						"schema":{"refId":"A","fields":[
+							{"name":"time","type":"time"},
+							{"name":"up","type":"number"}
+						]},
+						"data":{"values":[[1700000000000],[1]]}
+					}]}}
 				}`))
-
 			default:
 				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 				w.WriteHeader(http.StatusNotFound)
@@ -182,12 +263,8 @@ func newProxyServer(
 	))
 }
 
-func mustUnmarshalTarget(
-	t *testing.T,
-	data string,
-) grafana.Target {
+func mustUnmarshalTarget(t *testing.T, data string) grafana.Target {
 	t.Helper()
-
 	var target grafana.Target
 	if err := json.Unmarshal([]byte(data), &target); err != nil {
 		t.Fatalf("unmarshaling target: %v", err)

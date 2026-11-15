@@ -1,8 +1,10 @@
 package grafanatui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,33 +15,44 @@ import (
 // Messages for async dashboard and panel data loading.
 type (
 	dashboardLoadedMsg struct{ dashboard *grafana.Dashboard }
-	panelDataMsg       struct{ result *grafana.QueryResult }
-	panelErrorMsg      struct{ err error }
+	panelDataMsg       struct {
+		result     *grafana.QueryResult
+		generation int
+	}
+	panelErrorMsg struct {
+		err        error
+		generation int
+	}
 )
 
 // panelView shows one panel at a time with navigation.
 type panelView struct {
-	client          *grafana.Client
-	uid             string
-	dashboard       *grafana.Dashboard
-	panels          []grafana.Panel
-	index           int
-	data            *grafana.QueryResult
-	loading         bool
-	width           int
-	height          int
-	timeRange       grafana.TimeRange
-	err             error
-	hiddenSeries    map[string]bool
-	variableValues  map[string]string
-	variableOptions map[string][]string
-	initialPanelID  int // if >0, jump to this panel after loading
+	client             *grafana.Client
+	uid                string
+	dashboard          *grafana.Dashboard
+	panels             []grafana.Panel
+	index              int
+	data               *grafana.QueryResult
+	loading            bool
+	width              int
+	height             int
+	timeRange          grafana.TimeRange
+	err                error
+	hiddenSeries       map[string]bool
+	variableValues     map[string]string
+	variableOptions    map[string][]string
+	initialPanelID     int // if >0, jump to this panel after loading
+	initialVariables   map[string]string
+	preserveTimeRange  bool
+	generation         int
+	variableGeneration int
+	cancel             context.CancelFunc
 }
 
 // newPanelView creates a panel view that will load the given
 // dashboard by UID.
 func newPanelView(client *grafana.Client, uid string) *panelView {
-	return &panelView{
+	return &panelView{ //nolint:exhaustruct // optional navigation and refresh state starts zero-valued
 		client:          client,
 		uid:             uid,
 		dashboard:       nil,
@@ -49,7 +62,7 @@ func newPanelView(client *grafana.Client, uid string) *panelView {
 		loading:         true,
 		width:           0,
 		height:          0,
-		timeRange:       grafana.TimeRange{From: "now-1h", To: "now"},
+		timeRange:       grafana.TimeRange{From: defaultTimeFrom, To: timeNow},
 		err:             nil,
 		hiddenSeries:    nil,
 		variableValues:  nil,
@@ -64,12 +77,16 @@ func (p *panelView) Init() tea.Cmd {
 }
 
 // Update handles messages for the panel view.
+//
+//nolint:cyclop // panel message routing is centralized here
 func (p *panelView) Update(msg tea.Msg) (view, tea.Cmd) {
 	switch msg := msg.(type) {
 	case dashboardLoadedMsg:
 		return p.handleDashboardLoaded(msg)
 	case variablesResolvedMsg:
 		return p.handleVariablesResolved(msg)
+	case variablesResolveErrorMsg:
+		return p.handleVariablesResolveError(msg)
 	case panelDataMsg, panelErrorMsg:
 		return p.handlePanelResult(msg)
 	case setVariablesMsg:
@@ -90,9 +107,17 @@ func (p *panelView) Update(msg tea.Msg) (view, tea.Cmd) {
 func (p *panelView) handlePanelResult(msg tea.Msg) (view, tea.Cmd) {
 	switch msg := msg.(type) {
 	case panelDataMsg:
+		if msg.generation != p.generation {
+			return p, nil
+		}
 		p.data = msg.result
 	case panelErrorMsg:
-		p.err = msg.err
+		if msg.generation != p.generation {
+			return p, nil
+		}
+		if !isContextCancellation(msg.err) {
+			p.err = msg.err
+		}
 	}
 
 	p.loading = false
@@ -105,8 +130,9 @@ func (p *panelView) handleSetVariables(msg setVariablesMsg) (view, tea.Cmd) {
 	p.loading = true
 	p.data = nil
 	p.err = nil
+	p.invalidatePanelQuery()
 
-	return p, p.fetchPanelData()
+	return p, p.resolveVariables()
 }
 
 func (p *panelView) handleSetTimeRange(msg setTimeRangeMsg) (view, tea.Cmd) {
@@ -114,13 +140,20 @@ func (p *panelView) handleSetTimeRange(msg setTimeRangeMsg) (view, tea.Cmd) {
 	p.loading = true
 	p.data = nil
 	p.err = nil
+	p.invalidatePanelQuery()
 
-	return p, p.fetchPanelData()
+	return p, p.resolveVariables()
 }
 
 // handleDashboardLoaded processes a loaded dashboard.
 func (p *panelView) handleDashboardLoaded(msg dashboardLoadedMsg) (view, tea.Cmd) {
 	p.dashboard = msg.dashboard
+	if !p.preserveTimeRange && p.dashboard.Time.From != "" && p.dashboard.Time.To != "" {
+		p.timeRange = grafana.TimeRange{
+			From: p.dashboard.Time.From,
+			To:   p.dashboard.Time.To,
+		}
+	}
 	p.panels = grafana.FlattenPanels(msg.dashboard.Panels)
 
 	if len(p.panels) == 0 {
@@ -150,29 +183,55 @@ func (p *panelView) handleDashboardLoaded(msg dashboardLoadedMsg) (view, tea.Cmd
 func (p *panelView) handleVariablesResolved(
 	msg variablesResolvedMsg,
 ) (view, tea.Cmd) {
+	if msg.generation != p.variableGeneration {
+		return p, nil
+	}
 	p.variableOptions = msg.options
 	p.variableValues = msg.defaults
+	p.initialVariables = nil
 
 	return p, p.fetchPanelData()
+}
+
+func (p *panelView) handleVariablesResolveError(
+	msg variablesResolveErrorMsg,
+) (view, tea.Cmd) {
+	if msg.generation != p.variableGeneration {
+		return p, nil
+	}
+	p.err = msg.err
+	p.loading = false
+
+	return p, nil
 }
 
 // resolveVariables returns a command to resolve template variable
 // options via the Prometheus API.
 func (p *panelView) resolveVariables() tea.Cmd {
+	p.variableGeneration++
+	generation := p.variableGeneration
 	client := p.client
 	variables := p.dashboard.Templating.List
+	timeRange := p.timeRange
+	selections := p.variableValues
+	if selections == nil {
+		selections = p.initialVariables
+	}
+	selections = cloneVariableValues(selections)
 
 	return func() tea.Msg {
-		options, defaults, err := client.ResolveVariableOptions(
-			contextBackground(), variables,
+		options, defaults, err := client.ResolveVariableOptionsWithSelections(
+			contextBackground(),
+			variables,
+			timeRange,
+			selections,
 		)
 		if err != nil {
-			return panelErrorMsg{err: err}
+			return variablesResolveErrorMsg{err: err, generation: generation}
 		}
 
 		return variablesResolvedMsg{
-			options:  options,
-			defaults: defaults,
+			options: options, defaults: defaults, generation: generation,
 		}
 	}
 }
@@ -188,6 +247,9 @@ func (p *panelView) handlePopAndFilter(msg popAndFilterMsg) (view, tea.Cmd) {
 // allowed so the user can go back.
 func (p *panelView) handleKeyMsgGuarded(msg tea.KeyMsg) (view, tea.Cmd) {
 	if msg.String() == keyEsc {
+		if p.cancel != nil {
+			p.cancel()
+		}
 		return p, func() tea.Msg { return popViewMsg{} }
 	}
 
@@ -313,11 +375,18 @@ func (p *panelView) fetchDashboard() tea.Cmd {
 			contextBackground(), uid,
 		)
 		if err != nil {
-			return panelErrorMsg{err: err}
+			return panelErrorMsg{err: err, generation: 0}
 		}
 
 		return dashboardLoadedMsg{dashboard: dashboard}
 	}
+}
+
+func (p *panelView) invalidatePanelQuery() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.generation++
 }
 
 // fetchPanelData returns a command to load the current panel's data.
@@ -338,18 +407,22 @@ func (p *panelView) fetchPanelData() tea.Cmd {
 		width = 80 //nolint:mnd // sensible default
 	}
 
+	p.invalidatePanelQuery()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	p.cancel = cancel
+	generation := p.generation
 	p.loading = true
 
 	return func() tea.Msg {
 		result, err := client.QueryPanel(
-			contextBackground(), panel, timeRange, width,
+			ctx, panel, timeRange, width,
 			variables, variableOverrides, allPanels,
 		)
 		if err != nil {
-			return panelErrorMsg{err: err}
+			return panelErrorMsg{err: err, generation: generation}
 		}
 
-		return panelDataMsg{result: result}
+		return panelDataMsg{result: result, generation: generation}
 	}
 }
 
@@ -384,8 +457,8 @@ func (p *panelView) renderTitleBar(width int) string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{
-			Light: "#333333",
-			Dark:  "#EEEEEE",
+			Light: colorLightText,
+			Dark:  colorDarkText,
 		})
 
 	panelURL := fmt.Sprintf(
@@ -427,8 +500,15 @@ func (p *panelView) renderContent(width, height int) (rendered string) {
 
 	panel := p.panels[p.index]
 	renderer := RendererForPanel(panel.Type)
+	if len(p.data.Warnings) == 0 {
+		return renderer.Render(p.data, panel, width, height, p.hiddenSeries)
+	}
 
-	return renderer.Render(p.data, panel, width, height, p.hiddenSeries)
+	warning := "! " + strings.Join(p.data.Warnings, "; ")
+	warning = truncateTableText(warning, width)
+	body := renderer.Render(p.data, panel, width, max(height-1, 1), p.hiddenSeries)
+
+	return warning + "\n" + body
 }
 
 // Title returns the view title for breadcrumbs.

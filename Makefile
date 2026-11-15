@@ -8,6 +8,10 @@ build:
 test:
 	go test -v ./...
 
+.PHONY: test-race
+test-race:
+	go test -race ./...
+
 .PHONY: test-integration
 test-integration:
 	go test -v -tags integration -count=1 -timeout 5m ./...

@@ -21,12 +21,12 @@ func (t timePreset) FilterValue() string { return t.label }
 // getTimePresets returns the available quick-select time ranges.
 func getTimePresets() []timePreset {
 	return []timePreset{
-		{label: "Last 5 minutes", from: "now-5m", to: "now"},
-		{label: "Last 15 minutes", from: "now-15m", to: "now"},
-		{label: "Last 1 hour", from: "now-1h", to: "now"},
-		{label: "Last 6 hours", from: "now-6h", to: "now"},
-		{label: "Last 24 hours", from: "now-24h", to: "now"},
-		{label: "Last 7 days", from: "now-7d", to: "now"},
+		{label: "Last 5 minutes", from: "now-5m", to: timeNow},
+		{label: "Last 15 minutes", from: timeFifteenMins, to: timeNow},
+		{label: "Last 1 hour", from: defaultTimeFrom, to: timeNow},
+		{label: "Last 6 hours", from: "now-6h", to: timeNow},
+		{label: "Last 24 hours", from: "now-24h", to: timeNow},
+		{label: "Last 7 days", from: "now-7d", to: timeNow},
 	}
 }
 
