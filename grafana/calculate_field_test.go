@@ -222,8 +222,8 @@ func TestApplyTransformationsCalculateFieldUnsupportedMode(t *testing.T) {
 
 	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{}}
 	grafana.ApplyTransformations(result, []grafana.Transformation{{
-		ID: "calculateField", Options: json.RawMessage(`{"mode":"windowFunctions"}`),
+		ID: "calculateField", Options: json.RawMessage(`{"mode":"madeUpMode"}`),
 	}})
 	require.Len(t, result.Warnings, 1)
-	assert.Contains(t, result.Warnings[0], "windowFunctions")
+	assert.Contains(t, result.Warnings[0], "madeUpMode")
 }

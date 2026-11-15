@@ -10,6 +10,8 @@ import (
 	"strconv"
 )
 
+const joinModeOuter = "outer"
+
 // ApplyTransformations applies a panel's transformations to its query
 // result, modifying data frames in place.
 //
@@ -76,7 +78,7 @@ func applyJoinByField(result *QueryResult, raw json.RawMessage) {
 		return
 	}
 
-	if opts.Mode != "" && opts.Mode != "outer" {
+	if opts.Mode != "" && opts.Mode != joinModeOuter {
 		slog.Debug("unsupported joinByField mode, skipping", "mode", opts.Mode)
 		return
 	}

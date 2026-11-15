@@ -69,7 +69,7 @@ Text panels remain visible in navigation. Alert-list acknowledgement and other a
 - `organize`, including exclusions, renaming, and `indexByName` ordering.
 - `filterByValue`.
 - `convertFieldType` for string-to-number conversion.
-- `calculateField` with binary arithmetic and row reduction, including legacy/current operands, constants, aliases, field replacement, and time-aligned cross-query operands.
+- `calculateField` with binary arithmetic (including all-number-fields), unary operations, row reduction, cumulative sum/mean, trailing/centered moving windows, and row indices, including legacy/current operands, constants, aliases, field replacement, and time-aligned cross-query operands.
 - `reduce` with common reducers.
 
 Unknown transformation IDs produce a visible warning in the affected panel. Other transformation types are not yet implemented.

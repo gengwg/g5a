@@ -26,6 +26,10 @@ type calculateFieldOptions struct {
 	TimeSeries    *bool                  `json:"timeSeries"`
 	Binary        calculateBinaryOptions `json:"binary"`
 	Reduce        calculateReduceOptions `json:"reduce"`
+	Unary         calculateUnaryOptions  `json:"unary"`
+	Cumulative    calculateSeriesOptions `json:"cumulative"`
+	Window        calculateWindowOptions `json:"window"`
+	Index         calculateIndexOptions  `json:"index"`
 }
 
 type calculateBinaryOptions struct {
@@ -75,22 +79,60 @@ func applyCalculateField(result *QueryResult, raw json.RawMessage) {
 
 	switch opts.Mode {
 	case "", "reduceRow":
+		prepareNonBinaryFrames(result, &opts)
 		applyCalculateFieldToFrames(result, &opts, calculateReducedFrame)
 	case "binary":
-		if opts.Binary.Operator == "" {
-			opts.Binary.Operator = "+"
-		}
-		if !supportedBinaryOperator(opts.Binary.Operator) {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("unsupported calculateField operator %q", opts.Binary.Operator))
-			return
-		}
-		prepareBinaryFrames(result, &opts)
-		applyCalculateFieldToFrames(result, &opts, calculateBinaryFrame)
+		applyBinaryCalculation(result, &opts)
+	case "unary":
+		prepareNonBinaryFrames(result, &opts)
+		applyCalculateFieldToFrames(result, &opts, calculateUnaryFrame)
+	case "cumulativeFunctions":
+		applyCumulativeCalculation(result, &opts)
+	case "windowFunctions":
+		applyWindowCalculation(result, &opts)
+	case "index":
+		prepareNonBinaryFrames(result, &opts)
+		applyCalculateFieldToFrames(result, &opts, calculateIndexFrame)
 	default:
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("unsupported calculateField mode %q", opts.Mode))
 	}
+}
+
+func applyBinaryCalculation(result *QueryResult, opts *calculateFieldOptions) {
+	if opts.Binary.Operator == "" {
+		opts.Binary.Operator = "+"
+	}
+	if !supportedBinaryOperator(opts.Binary.Operator) {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("unsupported calculateField operator %q", opts.Binary.Operator))
+		return
+	}
+	prepareBinaryFrames(result, opts)
+	if opts.Binary.Left.Matcher != nil && opts.Binary.Left.Matcher.ID == "byType" {
+		applyCalculateFieldToFrames(result, opts, calculateBinaryByTypeFrame)
+	} else {
+		applyCalculateFieldToFrames(result, opts, calculateBinaryFrame)
+	}
+}
+
+func applyCumulativeCalculation(result *QueryResult, opts *calculateFieldOptions) {
+	if !supportedCumulativeReducer(opts.Cumulative.Reducer) {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("unsupported cumulative reducer %q", opts.Cumulative.Reducer))
+		return
+	}
+	prepareNonBinaryFrames(result, opts)
+	applyCalculateFieldToFrames(result, opts, calculateCumulativeFrame)
+}
+
+func applyWindowCalculation(result *QueryResult, opts *calculateFieldOptions) {
+	if warning := normalizeWindowOptions(opts); warning != "" {
+		result.Warnings = append(result.Warnings, warning)
+		return
+	}
+	prepareNonBinaryFrames(result, opts)
+	applyCalculateFieldToFrames(result, opts, calculateWindowFrame)
 }
 
 func applyCalculateFieldToFrames(
@@ -132,7 +174,7 @@ func prepareBinaryFrames(result *QueryResult, opts *calculateFieldOptions) {
 
 	applyJoinByField(result, mustMarshal(joinByFieldOptions{
 		ByField: timeField,
-		Mode:    "outer",
+		Mode:    joinModeOuter,
 	}))
 }
 
@@ -176,6 +218,18 @@ func calculateBinaryFrame(frame *DataFrame, opts *calculateFieldOptions) bool {
 		return false
 	}
 
+	values := calculateBinaryValues(left, right, opts.Binary.Operator)
+
+	name := opts.Alias
+	if name == "" {
+		name = strings.TrimSpace(leftName + " " + opts.Binary.Operator + " " + rightName)
+	}
+	appendCalculatedField(frame, opts, name, values)
+
+	return true
+}
+
+func calculateBinaryValues(left, right []any, operator string) []any {
 	values := make([]any, len(left))
 	for row := range left {
 		leftNumber, leftOK := binaryNumber(left[row])
@@ -187,19 +241,13 @@ func calculateBinaryFrame(frame *DataFrame, opts *calculateFieldOptions) bool {
 		if !leftOK || !rightOK {
 			continue
 		}
-		value := applyBinaryOperator(leftNumber, opts.Binary.Operator, rightNumber)
+		value := applyBinaryOperator(leftNumber, operator, rightNumber)
 		if !math.IsNaN(value) && !math.IsInf(value, 0) {
 			values[row] = value
 		}
 	}
 
-	name := opts.Alias
-	if name == "" {
-		name = strings.TrimSpace(leftName + " " + opts.Binary.Operator + " " + rightName)
-	}
-	appendCalculatedField(frame, opts, name, values)
-
-	return true
+	return values
 }
 
 func binaryOperand(

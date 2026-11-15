@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -16,7 +17,10 @@ import (
 	"github.com/gengwg/g5a/grafana"
 )
 
-const legendLines = 2
+const (
+	legendLines        = 2
+	legendNameMaxWidth = 40
+)
 
 // timeSeriesRenderer renders time series data as a braille line chart.
 type timeSeriesRenderer struct{}
@@ -305,6 +309,47 @@ func styleTimeSeriesDataSets(
 	}
 }
 
+func compactLegendName(name string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(name) <= width {
+		return name
+	}
+	name = trimLegendScheme(name)
+	if lipgloss.Width(name) <= width {
+		return name
+	}
+	if width == 1 {
+		return "…"
+	}
+
+	runes := []rune(name)
+	left := (width - 1) / 2
+	right := width - 1 - left
+	for left > 0 {
+		if left+right < len(runes) {
+			candidate := string(runes[:left]) + "…" + string(runes[len(runes)-right:])
+			if lipgloss.Width(candidate) <= width {
+				return candidate
+			}
+		}
+		left--
+		right = min(right+1, len(runes))
+	}
+
+	return truncateTableText(name, width)
+}
+
+func trimLegendScheme(name string) string {
+	parsed, err := url.Parse(name)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return name
+	}
+
+	return strings.TrimPrefix(name, parsed.Scheme+"://")
+}
+
 func buildLegendWithCalculations(
 	seriesNames []string,
 	seriesData map[string]timeSeriesEntry,
@@ -314,6 +359,7 @@ func buildLegendWithCalculations(
 	parts := make([]string, 0, len(seriesNames))
 	for index, name := range seriesNames {
 		style := lipgloss.NewStyle().Foreground(chartColor(index))
+		name = compactLegendName(name, min(maxWidth, legendNameMaxWidth))
 		text := "■ " + name + legendCalculations(seriesData[name], calculations)
 		parts = append(parts, style.Render(text))
 	}
@@ -341,7 +387,10 @@ func buildCalculatedLegend(
 			break
 		}
 		style := lipgloss.NewStyle().Foreground(chartColor(index))
-		text := "■ " + name + legendCalculationValues(seriesData[name], calculations)
+		calculationText := legendCalculationValues(seriesData[name], calculations)
+		nameWidth := min(width-3-lipgloss.Width(calculationText), legendNameMaxWidth)
+		name = compactLegendName(name, nameWidth)
+		text := "■ " + name + calculationText
 		lines = append(lines, style.Render(truncateTableText(text, max(width-1, 1))))
 	}
 
@@ -396,7 +445,7 @@ func renderTinyTimeSeries(
 	chart := sparkline(values, chartWidth)
 	line := truncateTableText(chart+" "+valueText, width)
 	if height > 1 {
-		line += "\n" + truncateTableText(seriesNames[0], width)
+		line += "\n" + compactLegendName(seriesNames[0], width)
 	}
 
 	return line
