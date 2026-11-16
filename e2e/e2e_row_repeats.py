@@ -162,6 +162,18 @@ try:
     assert all(text in outer for text in ("shared", "leftOnly", "rightOnly"))
     assert "unsupported" not in transformations
     print("reducers, time filters, and inner/outer-tabular joins: OK")
+
+    grouped_time = run_tui(
+        "http://127.0.0.1:18082/d/grouptime",
+        "group-time-repro.txt",
+    )
+    assert "Merged" in grouped_time and "MR (count)" in grouped_time
+    dates = ["2023-11-15", "2023-11-14", "2023-11-16"]
+    positions = [grouped_time.index(date) for date in dates]
+    assert positions == sorted(positions), grouped_time
+    assert "3" in grouped_time and "2" in grouped_time and "0" in grouped_time
+    assert "unsupported" not in grouped_time
+    print("formatTime, groupBy, and sortBy terminal pipeline: OK")
 finally:
     server.terminate()
     server.wait(timeout=5)

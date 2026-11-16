@@ -10,13 +10,16 @@ import (
 )
 
 const (
-	reducerSum   = "sum"
-	reducerMean  = "mean"
-	reducerMin   = "min"
-	reducerMax   = "max"
-	reducerCount = "count"
-	reducerFirst = "first"
-	reducerLast  = "last"
+	reducerSum      = "sum"
+	reducerMean     = "mean"
+	reducerMin      = "min"
+	reducerMax      = "max"
+	reducerCount    = "count"
+	reducerFirst    = "first"
+	reducerLast     = "last"
+	reducerRange    = "range"
+	reducerStdDev   = "stdDev"
+	reducerVariance = "variance"
 )
 
 type calculateFieldOptions struct {

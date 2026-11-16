@@ -217,7 +217,7 @@ func validateWindowOptions(opts *calculateFieldOptions) string {
 		return "calculateField window size must be larger than 0"
 	}
 	switch opts.Window.Reducer {
-	case reducerMean, "stdDev", "variance":
+	case reducerMean, reducerStdDev, reducerVariance:
 	default:
 		return fmt.Sprintf("unsupported window reducer %q", opts.Window.Reducer)
 	}
@@ -281,7 +281,7 @@ func calculateWindowStatistic(values []any, reducer string) float64 {
 		return windowMean(values)
 	}
 	variance := windowVariance(values)
-	if reducer == "stdDev" {
+	if reducer == reducerStdDev {
 		return math.Sqrt(variance)
 	}
 

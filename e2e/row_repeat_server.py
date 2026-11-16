@@ -360,6 +360,31 @@ QUERY_RESULT_DASHBOARD = {
 }
 
 
+GROUP_TIME_DASHBOARD = {
+    "title": "Grouped time", "refresh": False, "timezone": "UTC",
+    "time": {"from": "now-1h", "to": "now"},
+    "templating": {"list": []},
+    "panels": [{
+        "id": 57, "type": "table", "title": "Grouped dates",
+        "datasource": {"uid": "prom1", "type": "prometheus"},
+        "targets": [{"refId": "K", "expr": "groupTime", "instant": True, "range": False,
+                     "datasource": {"uid": "prom1", "type": "prometheus"}}],
+        "transformations": [
+            {"id": "formatTime", "options": {
+                "timeField": "Merged", "outputFormat": "YYYY-MM-DD", "timezone": "utc",
+            }},
+            {"id": "groupBy", "options": {"fields": {
+                "MR": {"operation": "aggregate", "aggregations": ["count"]},
+                "Merged": {"operation": "groupby", "aggregations": []},
+            }}},
+            {"id": "sortBy", "options": {"sort": [{"field": "MR (count)", "desc": True}]}},
+        ],
+        "options": {"showHeader": True},
+        "gridPos": {"x": 0, "y": 0, "w": 24, "h": 10},
+    }],
+}
+
+
 TRANSFORM_DASHBOARD = {
     "title": "Transformation fidelity", "refresh": False, "timezone": "UTC",
     "time": {"from": "1000", "to": "2000"},
@@ -446,6 +471,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"dashboard": QUERY_RESULT_DASHBOARD})
         elif self.path == "/api/dashboards/uid/transformfidelity":
             self.send_json({"dashboard": TRANSFORM_DASHBOARD})
+        elif self.path == "/api/dashboards/uid/grouptime":
+            self.send_json({"dashboard": GROUP_TIME_DASHBOARD})
         elif self.path.startswith("/api/datasources/proxy/uid/prom1/api/v1/label/cluster/values"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             with capture_lock:
@@ -495,6 +522,18 @@ class Handler(BaseHTTPRequestHandler):
                     "data": {"values": [
                         ["shared", "leftOnly"] if left else ["shared", "rightOnly"],
                         [1, 2] if left else [10, 20],
+                    ]},
+                }]}
+                continue
+            if cluster == "groupTime":
+                results[query["refId"]] = {"frames": [{
+                    "schema": {"refId": query["refId"], "fields": [
+                        {"name": "Merged", "type": "time"},
+                        {"name": "MR", "type": "string"},
+                    ]},
+                    "data": {"values": [
+                        [1700000000000, 1700000000000, 1700086400000, 1700086400000, 1700086400000, 1700172800000],
+                        ["a", "b", "a", "a", "a", None],
                     ]},
                 }]}
                 continue

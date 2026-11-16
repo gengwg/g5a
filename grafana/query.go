@@ -184,7 +184,7 @@ func (c *Client) QueryPanel(
 		fromMs,
 		toMs,
 	)
-	ApplyTransformations(result, transformations)
+	ApplyTransformationsWithTimezone(result, transformations, timeRange.Timezone)
 
 	return result, nil
 }

@@ -35,11 +35,21 @@ const (
 
 // ApplyTransformations applies a panel's transformations to its query
 // result, modifying data frames in place.
-//
-//nolint:cyclop // transformation dispatch is centralized here
 func ApplyTransformations(
 	result *QueryResult,
 	transformations []Transformation,
+) {
+	ApplyTransformationsWithTimezone(result, transformations, "")
+}
+
+// ApplyTransformationsWithTimezone applies transformations using the dashboard
+// timezone for time formatting operations.
+//
+//nolint:cyclop // transformation dispatch is centralized here
+func ApplyTransformationsWithTimezone(
+	result *QueryResult,
+	transformations []Transformation,
+	timezone string,
 ) {
 	materializeLabelFields(
 		result,
@@ -64,6 +74,10 @@ func ApplyTransformations(
 			applyReduce(result, t.Options)
 		case transformationGroupingToMatrix:
 			applyGroupingToMatrix(result, t.Options)
+		case "groupBy":
+			applyGroupBy(result, t.Options)
+		case "formatTime":
+			applyFormatTime(result, t.Options, timezone)
 		case "sortBy":
 			applySortBy(result, t.Options)
 		case "merge":
