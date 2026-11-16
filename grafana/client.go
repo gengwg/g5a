@@ -28,6 +28,7 @@ type Client struct {
 	dsCache map[string]string
 	// dsTypeCache maps datasource type → first UID of that type.
 	dsTypeCache map[string]string
+	scrapeCache map[string]int
 	dsMutex     sync.Mutex
 }
 
@@ -73,6 +74,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		httpClient:  &http.Client{Timeout: 60 * time.Second}, //nolint:exhaustruct // default transport settings
 		dsCache:     nil,
 		dsTypeCache: nil,
+		scrapeCache: nil,
 	}
 	for _, opt := range opts {
 		opt(client)
@@ -237,6 +239,53 @@ type datasourceInfo struct {
 	UID  string `json:"uid"`
 	Name string `json:"name"`
 	Type string `json:"type"`
+}
+
+func (c *Client) datasourceScrapeInterval(ctx context.Context, uid string) int {
+	const defaultScrapeIntervalMs = 15000
+	c.dsMutex.Lock()
+	defer c.dsMutex.Unlock()
+	if interval, ok := c.scrapeCache[uid]; ok {
+		return interval
+	}
+	var datasources []struct {
+		UID      string `json:"uid"`
+		JSONData struct {
+			TimeInterval string `json:"timeInterval"`
+		} `json:"jsonData"`
+	}
+	if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
+		return defaultScrapeIntervalMs
+	}
+	for _, datasource := range datasources {
+		if datasource.UID != uid {
+			continue
+		}
+		interval := parseDurationMs(datasource.JSONData.TimeInterval)
+		if interval <= 0 {
+			interval = defaultScrapeIntervalMs
+		}
+		if c.scrapeCache == nil {
+			c.scrapeCache = make(map[string]int)
+		}
+		c.scrapeCache[uid] = interval
+
+		return interval
+	}
+
+	return defaultScrapeIntervalMs
+}
+
+func parseDurationMs(value string) int {
+	if value == "" {
+		return 0
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0
+	}
+
+	return int(duration / time.Millisecond)
 }
 
 // ResolveDatasourceUID looks up a datasource by name or type and

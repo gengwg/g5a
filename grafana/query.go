@@ -142,12 +142,14 @@ func (c *Client) QueryPanel(
 			continue
 		}
 
+		scrapeIntervalMs := c.datasourceScrapeInterval(ctx, resolvedDatasource.UID)
 		query, err := buildDSQueryTarget(
 			target,
 			resolvedDatasource,
 			variables,
 			variableOverrides,
 			intervalMs,
+			scrapeIntervalMs,
 			toMs-fromMs,
 			maxDataPoints,
 			panel.Type,
@@ -270,12 +272,14 @@ func unresolvedDatasourceUID(uid string) bool {
 	return uid == "" || (strings.HasPrefix(uid, "${") && strings.HasSuffix(uid, "}"))
 }
 
+//nolint:cyclop // raw target normalization includes datasource, interval, and presentation options
 func buildDSQueryTarget(
 	target Target,
 	datasource *DatasourceRef,
 	variables []TemplateVariable,
 	overrides map[string]string,
 	intervalMs int,
+	scrapeIntervalMs int,
 	rangeMs int64,
 	maxDataPoints int,
 	panelType string,
@@ -294,17 +298,20 @@ func buildDSQueryTarget(
 		return nil, fmt.Errorf("decoding raw target: %w", err)
 	}
 
+	scrapeIntervalMs = targetScrapeIntervalMs(targetMap, scrapeIntervalMs)
 	interpolated := interpolateTargetValue(
 		targetMap,
 		variables,
 		overrides,
 		intervalMs,
+		scrapeIntervalMs,
 		rangeMs,
 	)
 	targetMap, ok := interpolated.(map[string]any)
 	if !ok {
 		return nil, errTargetNotObject
 	}
+	intervalMs = targetIntervalMs(targetMap, intervalMs)
 	_, hasInstant := targetMap["instant"]
 	_, hasRange := targetMap["range"]
 	if !hasInstant && !hasRange && (panelType == "timeseries" || panelType == "graph") {
@@ -314,7 +321,9 @@ func buildDSQueryTarget(
 	}
 	targetMap["datasource"] = datasource
 	targetMap["intervalMs"] = intervalMs
-	targetMap["maxDataPoints"] = maxDataPoints
+	if _, exists := targetMap["maxDataPoints"]; !exists {
+		targetMap["maxDataPoints"] = maxDataPoints
+	}
 
 	encoded, err := json.Marshal(targetMap)
 	if err != nil {
@@ -324,17 +333,44 @@ func buildDSQueryTarget(
 	return encoded, nil
 }
 
+func targetIntervalMs(targetMap map[string]any, computed int) int {
+	if raw, ok := targetMap["interval"].(string); ok {
+		if minimum := parseDurationMs(raw); minimum > computed {
+			computed = minimum
+		}
+	}
+	if raw, ok := targetMap["intervalMs"].(float64); ok && int(raw) > computed {
+		computed = int(raw)
+	}
+
+	return computed
+}
+
+func targetScrapeIntervalMs(targetMap map[string]any, fallback int) int {
+	if raw, ok := targetMap["interval"].(string); ok {
+		if minimum := parseDurationMs(raw); minimum > 0 {
+			return minimum
+		}
+	}
+	if raw, ok := targetMap["intervalMs"].(float64); ok && int(raw) > 0 {
+		return int(raw)
+	}
+
+	return fallback
+}
+
 func interpolateTargetValue(
 	value any,
 	variables []TemplateVariable,
 	overrides map[string]string,
 	intervalMs int,
+	scrapeIntervalMs int,
 	rangeMs int64,
 ) any {
 	switch typed := value.(type) {
 	case string:
 		resolved := ResolveVariables(typed, variables, overrides)
-		return resolveBuiltinVariables(resolved, intervalMs, rangeMs)
+		return resolveBuiltinVariables(resolved, intervalMs, scrapeIntervalMs, rangeMs)
 	case map[string]any:
 		result := make(map[string]any, len(typed))
 		for key, child := range typed {
@@ -343,6 +379,7 @@ func interpolateTargetValue(
 				variables,
 				overrides,
 				intervalMs,
+				scrapeIntervalMs,
 				rangeMs,
 			)
 		}
@@ -355,6 +392,7 @@ func interpolateTargetValue(
 				variables,
 				overrides,
 				intervalMs,
+				scrapeIntervalMs,
 				rangeMs,
 			)
 		}
@@ -401,16 +439,16 @@ var autoIntervalPattern = regexp.MustCompile(`\$__auto_interval_\w+`)
 func resolveBuiltinVariables(
 	expression string,
 	intervalMs int,
+	scrapeIntervalMs int,
 	rangeMs int64,
 ) string {
 	expression = autoIntervalPattern.ReplaceAllString(
 		expression,
 		formatDuration(intervalMs),
 	)
-	const defaultScrapeIntervalMs = 15000
 	rateIntervalMs := max(
-		intervalMs+defaultScrapeIntervalMs,
-		4*defaultScrapeIntervalMs,
+		intervalMs+scrapeIntervalMs,
+		4*scrapeIntervalMs,
 	)
 	replacements := []struct {
 		name  string

@@ -17,7 +17,7 @@ Unsupported transformations and panel types are shown explicitly rather than sil
 
 Prometheus is covered by unit and real Grafana integration tests. Other backend datasources are forwarded with their raw datasource-specific target fields preserved, but do not yet have dedicated integration coverage.
 
-Legacy timeseries targets without explicit `instant` or `range` fields default to range queries. Explicit `instant`, `range`, `format`, `intervalMs`, and `maxDataPoints` values are preserved. Relative Grafana time expressions and `/s` through `/y` rounding are supported; unsupported expressions produce a visible error instead of silently using the current time.
+Legacy timeseries targets without explicit `instant` or `range` fields default to range queries. Explicit `instant`, `range`, `format`, `intervalMs`, and `maxDataPoints` values are preserved. Calculated intervals honor target min steps, and `$__rate_interval` uses the target min step when set, otherwise the datasource scrape interval. Relative Grafana time expressions and `/s` through `/y` rounding are supported; unsupported expressions produce a visible error instead of silently using the current time.
 
 ## Variables
 

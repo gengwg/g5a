@@ -1,6 +1,7 @@
 package grafana
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -20,11 +21,46 @@ func TestResolveBuiltinVariablesRateInterval(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			got := resolveBuiltinVariables("$__rate_interval", test.intervalMs, 0)
+			got := resolveBuiltinVariables("$__rate_interval", test.intervalMs, 15000, 0)
 			if got != test.want {
 				t.Errorf("rate interval = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestBuildDSQueryTargetHonorsMinStepAndExplicitFields(t *testing.T) {
+	t.Parallel()
+
+	target := Target{
+		RefID:      "A",
+		Datasource: &DatasourceRef{UID: "prom1", Type: "prometheus"},
+		raw:        json.RawMessage(`{"expr":"rate(x[$__rate_interval])","interval":"5m","maxDataPoints":42}`),
+	}
+	raw, err := buildDSQueryTarget(target, target.Datasource, nil, nil, 1000, 15000, 3600000, 100, "timeseries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["intervalMs"] != float64(300000) {
+		t.Errorf("intervalMs = %v, want 300000", got["intervalMs"])
+	}
+	if got["maxDataPoints"] != float64(42) {
+		t.Errorf("maxDataPoints = %v, want 42", got["maxDataPoints"])
+	}
+	if got["expr"] != "rate(x[20m])" {
+		t.Errorf("rate interval = %v, want 20m", got["expr"])
+	}
+}
+
+func TestResolveBuiltinVariablesRateIntervalUsesDatasourceScrapeInterval(t *testing.T) {
+	t.Parallel()
+
+	if got := resolveBuiltinVariables("$__rate_interval", 15000, 60000, 0); got != "4m" {
+		t.Errorf("rate interval = %q, want 4m", got)
 	}
 }
 
