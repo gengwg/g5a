@@ -22,27 +22,29 @@ import (
 var (
 	version = "(devel)"
 
-	errURLRequired = errors.New("URL is required: set --url or GRAFANA_URL")
+	errURLRequired = errors.New("URL is required: pass URL, set --url, or set GRAFANA_URL")
 )
 
 func main() {
 	var flags flags
 
 	rootCmd := &cobra.Command{ //nolint:exhaustruct // cobra commands use optional fields
-		Use:   "g5a",
+		Use:   "g5a [URL]",
 		Short: "Browse Grafana dashboards in the terminal",
 		Long: `Connect to a remote Grafana instance and browse dashboards in a
 terminal UI. Authenticate with a service account token (recommended) or
 basic auth credentials.
 
 Authentication priority: command-line flags override environment variables.
-For the URL set --url or GRAFANA_URL.
+For the URL pass a positional URL, set --url, or set GRAFANA_URL.
+URL priority: --url flag, positional URL, then GRAFANA_URL.
 For token auth set --token or GRAFANA_SERVICE_ACCOUNT_TOKEN.
 For basic auth set --username/--password or GRAFANA_USERNAME/GRAFANA_PASSWORD.
 When both are available, token auth takes precedence.`,
-		Args:    cobra.NoArgs,
+		Args:    cobra.MaximumNArgs(1),
 		Version: version,
-		RunE: func(command *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, args []string) error {
+			flags.url = resolvePositionalURL(flags.url, args, command.Flags().Changed("url"))
 			flags.refreshSet = command.Flags().Changed("refresh")
 			return run(flags)
 		},
@@ -88,6 +90,14 @@ type flags struct {
 	debug      bool
 	refresh    time.Duration
 	refreshSet bool
+}
+
+func resolvePositionalURL(current string, args []string, urlFlagSet bool) string {
+	if !urlFlagSet && len(args) == 1 {
+		return args[0]
+	}
+
+	return current
 }
 
 // run creates the Grafana client and starts the TUI.

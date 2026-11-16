@@ -79,14 +79,17 @@ The Homebrew package and release binaries at `lovromazgon/grafana-tui` are for t
 ## Usage
 
 ```sh
-g5a --url URL [flags]
+g5a [URL] [flags]
 ```
+
+Pass the URL directly or use `--url`; the flag takes precedence over a positional URL, and `GRAFANA_URL` is used when neither is supplied.
 
 Open a dashboard or panel directly:
 
 ```sh
+g5a https://grafana.example.com/d/abc123
+g5a 'https://grafana.example.com/d/abc123?viewPanel=22'
 g5a --url https://grafana.example.com/d/abc123
-g5a --url 'https://grafana.example.com/d/abc123?viewPanel=22'
 ```
 
 ### Authentication

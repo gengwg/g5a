@@ -55,6 +55,40 @@ func TestParseGrafanaURLDefaults(t *testing.T) {
 	}
 }
 
+func TestResolvePositionalURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		current    string
+		args       []string
+		urlFlagSet bool
+		want       string
+	}{
+		{
+			name: "positional", current: "", args: []string{"https://grafana.example.com/d/abc"},
+			urlFlagSet: false, want: "https://grafana.example.com/d/abc",
+		},
+		{
+			name: "flag wins", current: "https://flag.example.com",
+			args: []string{"https://positional.example.com"}, urlFlagSet: true, want: "https://flag.example.com",
+		},
+		{
+			name: "environment fallback preserved", current: "https://env.example.com",
+			args: nil, urlFlagSet: false, want: "https://env.example.com",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolvePositionalURL(test.current, test.args, test.urlFlagSet)
+			if got != test.want {
+				t.Errorf("URL = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestInitStderrDebugLogging(t *testing.T) {
 	for _, test := range []struct {
 		name      string
