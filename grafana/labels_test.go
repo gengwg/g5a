@@ -155,7 +155,7 @@ func TestApplyTransformationsJoinMaterializesOnlyJoinLabel(t *testing.T) {
 		assert.NotEqual(t, "instance", field.Name)
 	}
 	assert.ElementsMatch(t,
-		[]string{"cluster", "Time #A", "Value #A", "Time #B", "Value #B"},
+		[]string{"cluster", "Time", "Value #A", "Time 1", "Value #B"},
 		fieldNames,
 	)
 }
@@ -220,6 +220,78 @@ func TestApplyTransformationsOrganizeKeepsWideFrameFields(t *testing.T) {
 	assert.JSONEq(t, `["alpha"]`, string(frame.Data.Values[0]))
 	assert.JSONEq(t, `[1]`, string(frame.Data.Values[1]))
 	assert.JSONEq(t, `[2]`, string(frame.Data.Values[2]))
+}
+
+func TestApplyTransformationsJoinTimeNamesMatchOrganizeExclusions(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+			},
+			`[1000]`, `[1]`,
+		)}},
+		"B": {Frames: []grafana.DataFrame{newTransformFrame(
+			"B",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+			},
+			`[1000]`, `[2]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{
+		{ID: "joinByField", Options: json.RawMessage(`{"byField":"cluster","mode":"outer"}`)},
+		{ID: "organize", Options: json.RawMessage(`{"excludeByName":{"Time":true,"Time 1":true}}`)},
+	})
+	frame := result.Results["A"].Frames[0]
+	for _, field := range frame.Schema.Fields {
+		assert.NotEqual(t, "time", field.Type, "excluded time field remains: %s", field.Name)
+	}
+	assert.Equal(t, "Value #A", frame.Schema.Fields[1].Name)
+	assert.Equal(t, "Value #B", frame.Schema.Fields[2].Name)
+}
+
+func TestApplyTransformationsJoinTimeSuffixAvoidsExistingNames(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Time 1", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+			},
+			`[1000,1500]`, `[1000,1500]`, `[1,1]`,
+		)}},
+		"B": {Frames: []grafana.DataFrame{newTransformFrame(
+			"B",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+			},
+			`[2000]`, `[2]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "joinByField", Options: json.RawMessage(`{"byField":"cluster","mode":"outer"}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	timeValues := make(map[string]string)
+	for index, field := range frame.Schema.Fields {
+		if field.Type == "time" {
+			timeValues[field.Name] = string(frame.Data.Values[index])
+		}
+	}
+	assert.JSONEq(t, `[1500]`, timeValues["Time"])
+	assert.JSONEq(t, `[1500]`, timeValues["Time 1"])
+	assert.JSONEq(t, `[2000]`, timeValues["Time 2"])
 }
 
 func TestApplyTransformationsOrganizeRenameThenJoinLabel(t *testing.T) {

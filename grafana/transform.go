@@ -271,11 +271,21 @@ func (j *dataFrameJoin) dataFrame() DataFrame {
 		nameCounts[field.Name]++
 	}
 
+	reservedTimeNames := make(map[string]bool, len(j.frame.Schema.Fields))
+	for _, field := range j.frame.Schema.Fields {
+		reservedTimeNames[field.Name] = true
+	}
+	usedTimeNames := make(map[string]bool)
 	for i := 1; i < len(j.frame.Schema.Fields); i++ {
 		field := &j.frame.Schema.Fields[i]
-		if nameCounts[field.Name] > 1 {
-			field.Name += " #" + j.sourceRefIDs[i]
+		if nameCounts[field.Name] <= 1 {
+			continue
 		}
+		if field.Type == fieldTypeTime {
+			field.Name = availableTimeFieldName(field.Name, reservedTimeNames, usedTimeNames)
+			continue
+		}
+		field.Name += " #" + j.sourceRefIDs[i]
 	}
 
 	j.frame.Data.Values = make([]json.RawMessage, len(j.columns))
@@ -285,6 +295,16 @@ func (j *dataFrameJoin) dataFrame() DataFrame {
 	j.coalesceDuplicateFields()
 
 	return j.frame
+}
+
+func availableTimeFieldName(base string, reserved, used map[string]bool) string {
+	candidate := base
+	for index := 0; used[candidate] || (index > 0 && reserved[candidate]); index++ {
+		candidate = base + " " + strconv.Itoa(index+1)
+	}
+	used[candidate] = true
+
+	return candidate
 }
 
 func (j *dataFrameJoin) coalesceDuplicateFields() {
