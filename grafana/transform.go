@@ -73,6 +73,7 @@ type dataFrameJoin struct {
 	columns      [][]any
 	rowIndexes   map[string]int
 	sourceRefIDs []string
+	sourceNames  []string
 	keyFieldSet  bool
 }
 
@@ -135,6 +136,7 @@ func newDataFrameJoin(byField, refID string) *dataFrameJoin {
 		columns:      [][]any{{}},
 		rowIndexes:   make(map[string]int),
 		sourceRefIDs: []string{""},
+		sourceNames:  []string{""},
 		keyFieldSet:  false,
 	}
 }
@@ -234,6 +236,7 @@ func (j *dataFrameJoin) addColumns(
 		j.columns = append(j.columns, column)
 		j.frame.Schema.Fields = append(j.frame.Schema.Fields, field)
 		j.sourceRefIDs = append(j.sourceRefIDs, refID)
+		j.sourceNames = append(j.sourceNames, field.Name)
 		columnIndexes[fieldIdx] = len(j.columns) - 1
 	}
 
@@ -271,21 +274,11 @@ func (j *dataFrameJoin) dataFrame() DataFrame {
 		nameCounts[field.Name]++
 	}
 
-	reservedTimeNames := make(map[string]bool, len(j.frame.Schema.Fields))
-	for _, field := range j.frame.Schema.Fields {
-		reservedTimeNames[field.Name] = true
-	}
-	usedTimeNames := make(map[string]bool)
 	for i := 1; i < len(j.frame.Schema.Fields); i++ {
 		field := &j.frame.Schema.Fields[i]
-		if nameCounts[field.Name] <= 1 {
-			continue
+		if nameCounts[field.Name] > 1 && field.Type != fieldTypeTime {
+			field.Name += " #" + j.sourceRefIDs[i]
 		}
-		if field.Type == fieldTypeTime {
-			field.Name = availableTimeFieldName(field.Name, reservedTimeNames, usedTimeNames)
-			continue
-		}
-		field.Name += " #" + j.sourceRefIDs[i]
 	}
 
 	j.frame.Data.Values = make([]json.RawMessage, len(j.columns))
@@ -293,6 +286,7 @@ func (j *dataFrameJoin) dataFrame() DataFrame {
 		j.frame.Data.Values[i] = mustMarshal(column)
 	}
 	j.coalesceDuplicateFields()
+	j.renameDuplicateTimeFields()
 
 	return j.frame
 }
@@ -307,13 +301,38 @@ func availableTimeFieldName(base string, reserved, used map[string]bool) string 
 	return candidate
 }
 
+func (j *dataFrameJoin) renameDuplicateTimeFields() {
+	nameCounts := make(map[string]int, len(j.frame.Schema.Fields))
+	reservedTimeNames := make(map[string]bool, len(j.frame.Schema.Fields))
+	for _, field := range j.frame.Schema.Fields {
+		nameCounts[field.Name]++
+		reservedTimeNames[field.Name] = true
+	}
+	usedTimeNames := make(map[string]bool)
+	for i := 1; i < len(j.frame.Schema.Fields); i++ {
+		field := &j.frame.Schema.Fields[i]
+		if field.Type == fieldTypeTime && nameCounts[field.Name] > 1 {
+			field.Name = availableTimeFieldName(field.Name, reservedTimeNames, usedTimeNames)
+		}
+	}
+}
+
 func (j *dataFrameJoin) coalesceDuplicateFields() {
 	fields := make([]DataFrameField, 0, len(j.frame.Schema.Fields))
 	columns := make([]json.RawMessage, 0, len(j.frame.Data.Values))
-	indexes := make(map[string]int, len(j.frame.Schema.Fields))
+	type coalesceFieldKey struct {
+		name  string
+		refID string
+		time  bool
+	}
+	indexes := make(map[coalesceFieldKey]int, len(j.frame.Schema.Fields))
 
 	for index, field := range j.frame.Schema.Fields {
-		if existing, duplicate := indexes[field.Name]; duplicate {
+		key := coalesceFieldKey{name: field.Name, refID: "", time: false}
+		if field.Type == fieldTypeTime {
+			key = coalesceFieldKey{name: j.sourceNames[index], refID: j.sourceRefIDs[index], time: true}
+		}
+		if existing, duplicate := indexes[key]; duplicate {
 			var left, right []any
 			if err := json.Unmarshal(columns[existing], &left); err != nil {
 				continue
@@ -330,7 +349,7 @@ func (j *dataFrameJoin) coalesceDuplicateFields() {
 			continue
 		}
 
-		indexes[field.Name] = len(fields)
+		indexes[key] = len(fields)
 		fields = append(fields, field)
 		columns = append(columns, j.frame.Data.Values[index])
 	}

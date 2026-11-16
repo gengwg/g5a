@@ -81,7 +81,7 @@ Unknown transformation IDs produce a visible warning in the affected panel. Othe
 
 - DataFrame `field.Config`, panel defaults, and ordered `byName` / `byRegexp` overrides.
 - Display names, compact datasource `displayNameFromDS` names (metric prefix or first label value), width-aware URL legends, and `${__field.labels.name}` interpolation.
-- Units, including literal, prefix, suffix, and scaled count custom units, decimals, no-value text, min/max, and absolute/percentage thresholds.
+- Units, including locale-formatted numbers, literal, prefix, suffix, and scaled count custom units, decimals, no-value text, min/max, and absolute/percentage thresholds.
 - DataFrame time fields rendered as local timestamps.
 - Value, range, regex, null, and NaN mappings.
 - Mapping colors, threshold colors, and color-background cells.

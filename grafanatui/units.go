@@ -80,6 +80,7 @@ var unitFormatters = map[string]func(float64, *int) string{ //nolint:gochecknogl
 	"velocitykmh":  formatVelocityKilometersPerHour,
 	"velocitymph":  formatVelocityMilesPerHour,
 	"velocityknot": formatVelocityKnots,
+	"locale":       formatLocale,
 }
 
 const (
@@ -422,6 +423,22 @@ func formatKilowatt(value float64, decimals *int) string {
 // formatVoltAmp formats a value in volt-amperes.
 func formatVoltAmp(value float64, decimals *int) string {
 	return formatUnitNumber(value, " VA", decimals)
+}
+
+func formatLocale(value float64, decimals *int) string {
+	formatted := formatRawNumber(value, decimals)
+	parts := strings.Split(formatted, ".")
+	integer := parts[0]
+	sign := 0
+	if strings.HasPrefix(integer, "-") {
+		sign = 1
+	}
+	for index := len(integer) - 3; index > sign; index -= 3 {
+		integer = integer[:index] + "," + integer[index:]
+	}
+	parts[0] = integer
+
+	return strings.Join(parts, ".")
 }
 
 // formatRawNumber formats a number with appropriate decimal places.

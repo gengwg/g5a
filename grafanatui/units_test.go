@@ -76,6 +76,9 @@ func TestFormatValue(t *testing.T) {
 		{name: "kilometers per hour", value: 42.5, unit: "velocitykmh", expected: "42.5 km/h"},
 		{name: "miles per hour", value: 42.5, unit: "velocitymph", expected: "42.5 mph"},
 		{name: "knots", value: 42.5, unit: "velocityknot", expected: "42.5 kn"},
+		{name: "locale integer", value: 340024, unit: "locale", expected: "340,024"},
+		{name: "locale negative", value: -1616, unit: "locale", expected: "-1,616"},
+		{name: "locale decimals", value: 1616.25, unit: "locale", expected: "1,616.25"},
 
 		// edge cases
 		{name: "zero", value: 0, unit: "short", expected: "0"},

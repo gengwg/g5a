@@ -294,6 +294,70 @@ func TestApplyTransformationsJoinTimeSuffixAvoidsExistingNames(t *testing.T) {
 	assert.JSONEq(t, `[2000]`, timeValues["Time 2"])
 }
 
+func TestApplyTransformationsJoinCoalescesTimeSeriesByRefID(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "beta"}},
+			},
+			`[1000]`, `[1]`, `[2]`,
+		)}},
+		"B": {Frames: []grafana.DataFrame{newTransformFrame(
+			"B",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "gamma"}},
+			},
+			`[2000]`, `[3]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "joinByField", Options: json.RawMessage(`{"byField":"cluster","mode":"outer"}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	timeNames := make([]string, 0, 2)
+	for _, field := range frame.Schema.Fields {
+		if field.Type == "time" {
+			timeNames = append(timeNames, field.Name)
+		}
+	}
+	assert.Equal(t, []string{"Time", "Time 1"}, timeNames)
+}
+
+func TestApplyTransformationsJoinTimeKeyDoesNotCollideWithFieldName(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Time #A", Type: "string"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+			},
+			`[1000]`, `["keep"]`, `[1]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "joinByField", Options: json.RawMessage(`{"byField":"cluster","mode":"outer"}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	found := false
+	for _, field := range frame.Schema.Fields {
+		if field.Name == "Time #A" && field.Type == "string" {
+			found = true
+		}
+	}
+	assert.True(t, found, "ordinary Time #A field was coalesced with the time key")
+}
+
 func TestApplyTransformationsOrganizeRenameThenJoinLabel(t *testing.T) {
 	t.Parallel()
 
