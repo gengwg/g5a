@@ -3,6 +3,7 @@ package grafana
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 )
@@ -18,13 +19,45 @@ type DashboardSearchResult struct {
 	FolderTitle string   `json:"folderTitle"`
 }
 
+// RefreshInterval accepts Grafana's string, boolean, and numeric refresh forms.
+type RefreshInterval string
+
+// UnmarshalJSON decodes a dashboard refresh interval.
+func (r *RefreshInterval) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*r = RefreshInterval(text)
+		return nil
+	}
+
+	var disabled bool
+	if err := json.Unmarshal(data, &disabled); err == nil {
+		if disabled {
+			*r = ""
+		} else {
+			*r = "0s"
+		}
+		return nil
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		*r = RefreshInterval(number.String())
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s", errInvalidRefresh, string(data))
+}
+
+var errInvalidRefresh = errors.New("invalid dashboard refresh value")
+
 // Dashboard represents a Grafana dashboard.
 type Dashboard struct {
-	Title      string        `json:"title"`
-	Panels     []Panel       `json:"panels"`
-	Templating Templating    `json:"templating"`
-	Time       DashboardTime `json:"time"`
-	Refresh    string        `json:"refresh"`
+	Title      string          `json:"title"`
+	Panels     []Panel         `json:"panels"`
+	Templating Templating      `json:"templating"`
+	Time       DashboardTime   `json:"time"`
+	Refresh    RefreshInterval `json:"refresh"`
 }
 
 // Panel represents a single panel within a dashboard.
@@ -42,6 +75,15 @@ type Panel struct {
 	Repeat          string           `json:"repeat,omitempty"`
 	RepeatDirection string           `json:"repeatDirection,omitempty"`
 	MaxPerRow       int              `json:"maxPerRow,omitempty"`
+	Collapsed       bool             `json:"collapsed,omitempty"`
+	row             *panelRow
+}
+
+type panelRow struct {
+	key    string
+	repeat string
+	baseY  int
+	height int
 }
 
 // Transformation represents a single panel data transformation.
@@ -225,12 +267,19 @@ func (c *Client) GetDashboard(
 ) (*Dashboard, error) {
 	path := "/api/dashboards/uid/" + url.PathEscape(uid)
 
-	var wrapper dashboardResponse
-	if err := c.doJSON(ctx, path, &wrapper); err != nil {
-		return nil, fmt.Errorf("getting dashboard: %w", err)
+	var raw json.RawMessage
+	if err := c.doJSON(ctx, path, &raw); err != nil {
+		if !dashboardFallbackStatus(err) {
+			return nil, fmt.Errorf("getting dashboard: %w", err)
+		}
+		return c.getDashboardV2(ctx, uid)
+	}
+	dashboard, err := c.dashboardFromResource(ctx, raw)
+	if err != nil {
+		return nil, err
 	}
 
-	return &wrapper.Dashboard, nil
+	return dashboard, nil
 }
 
 // skipPanelTypes lists panel types that are not useful in terminal
@@ -243,11 +292,40 @@ var skipPanelTypes = map[string]bool{ //nolint:gochecknoglobals // read-only set
 // that contain nested sub-panels. Non-data panels (text, dashlist,
 // etc.) are skipped.
 func FlattenPanels(panels []Panel) []Panel {
+	rowCounter := 0
+	result := flattenPanels(panels, nil, &rowCounter)
+	for _, panel := range result {
+		if panel.row == nil {
+			continue
+		}
+		panel.row.height = max(
+			panel.row.height,
+			panel.GridPos.Y+panel.GridPos.H-panel.row.baseY,
+		)
+	}
+
+	return result
+}
+
+func flattenPanels(panels []Panel, inherited *panelRow, counter *int) []Panel {
 	var result []Panel
+	activeRow := inherited
 
 	for _, panel := range panels {
 		if panel.Type == "row" {
-			result = append(result, FlattenPanels(panel.Panels)...)
+			*counter++
+			row := &panelRow{
+				key:    fmt.Sprintf("row-%d-%d", *counter, panel.ID),
+				repeat: panel.Repeat,
+				baseY:  panel.GridPos.Y,
+				height: max(panel.GridPos.H, 1),
+			}
+			result = append(result, flattenPanels(panel.Panels, row, counter)...)
+			if panel.Collapsed {
+				activeRow = inherited
+			} else {
+				activeRow = row
+			}
 			continue
 		}
 
@@ -255,6 +333,9 @@ func FlattenPanels(panels []Panel) []Panel {
 			continue
 		}
 
+		if activeRow != nil {
+			panel.row = activeRow
+		}
 		result = append(result, panel)
 	}
 

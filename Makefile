@@ -20,6 +20,10 @@ test-integration:
 lint:
 	golangci-lint run
 
+.PHONY: release
+release:
+	./scripts/build-release.sh $(VERSION)
+
 .PHONY: clean
 clean:
 	rm -f g5a

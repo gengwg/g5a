@@ -157,7 +157,7 @@ func timeSeriesGaugeEntries(frame *grafana.DataFrame) []gaugeEntry {
 
 		last := values[len(values)-1]
 		entries = append(entries, gaugeEntry{
-			name: field.Name, value: last,
+			name: fieldCategoryName(field, last), value: last,
 		})
 	}
 

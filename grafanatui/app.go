@@ -344,7 +344,7 @@ func (a *App) renderHeader() string {
 			Dark:  colorLightMuted,
 		})
 
-	header := titleStyle.Render(" grafana-tui") +
+	header := titleStyle.Render(" g5a") +
 		urlStyle.Render(" │ "+a.client.BaseURL())
 
 	separator := lipgloss.NewStyle().

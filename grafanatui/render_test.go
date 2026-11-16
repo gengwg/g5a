@@ -320,6 +320,123 @@ func TestTableRenderer(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // footer variants share one table fixture
+func TestTableRendererFooterAndCustomUnit(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{{
+			Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{
+				{Name: "cluster", Type: "string"},
+				{Name: "NotReady", Type: "number"},
+				{Name: "Cordoned, Ready", Type: "number"},
+			}},
+			Data: grafana.DataFrameData{Values: []json.RawMessage{
+				json.RawMessage(`["alpha","beta"]`),
+				json.RawMessage(`[1,2]`),
+				json.RawMessage(`[3,4]`),
+			}},
+		}}},
+	}}
+	panel := emptyPanel()
+	panel.FieldConfig = json.RawMessage(`{"defaults":{"unit":"suffix: GPU-h"}}`)
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,
+		"footer":{"show":true,"reducer":["sum"],"fields":"","countRows":false}
+	}`)
+
+	output := grafanatui.RendererForPanel("table").Render(result, panel, 100, 8, nil)
+	for _, expected := range []string{"TOTAL", "3 GPU-h", "7 GPU-h"} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("footer output does not contain %q:\n%s", expected, output)
+		}
+	}
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,
+		"footer":{"show":true,"reducer":["sum"],"fields":["NotReady"]}
+	}`)
+	selectedOutput := grafanatui.RendererForPanel("table").Render(result, panel, 100, 8, nil)
+	if strings.Contains(selectedOutput, "7 GPU-h") {
+		t.Errorf("footer included an unselected field:\n%s", selectedOutput)
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) > 8 {
+		t.Errorf("footer exceeded panel height: %d lines", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], "TOTAL") {
+		t.Errorf("footer is not the final table row:\n%s", output)
+	}
+
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,"footer":{"show":true,"reducer":["count"]}
+	}`)
+	countOutput := grafanatui.RendererForPanel("table").Render(result, panel, 100, 8, nil)
+	countLines := strings.Split(countOutput, "\n")
+	lastCountLine := countLines[len(countLines)-1]
+	if !strings.Contains(lastCountLine, "COUNT") || strings.Contains(lastCountLine, "GPU-h") {
+		t.Errorf("count footer inherited field formatting: %q", lastCountLine)
+	}
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,"footer":{"show":true,"reducer":["sum"],"fields":""}
+	}`)
+	shortOutput := grafanatui.RendererForPanel("table").Render(result, panel, 100, 3, nil)
+	shortLines := strings.Split(shortOutput, "\n")
+	if len(shortLines) != 3 || !strings.Contains(shortLines[2], "TOTAL") {
+		t.Errorf("constrained height dropped the footer:\n%s", shortOutput)
+	}
+
+	panel.Options = json.RawMessage(`{"showHeader":true}`)
+	panel.FieldConfig = json.RawMessage(`{
+		"defaults":{
+			"unit":"suffix: GPU-h",
+			"custom":{"footer":{"reducers":["sum"]}}
+		}
+	}`)
+	currentOutput := grafanatui.RendererForPanel("table").Render(result, panel, 100, 8, nil)
+	if !strings.Contains(currentOutput, "TOTAL") {
+		t.Errorf("current field-config footer was ignored:\n%s", currentOutput)
+	}
+
+	frame := result.Results["A"].Frames[0]
+	frame.Schema.Fields[0], frame.Schema.Fields[1] = frame.Schema.Fields[1], frame.Schema.Fields[0]
+	frame.Data.Values[0], frame.Data.Values[1] = frame.Data.Values[1], frame.Data.Values[0]
+	result.Results["A"] = grafana.QueryResultData{Frames: []grafana.DataFrame{frame}}
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,"footer":{"show":true,"reducer":["count"],"countRows":true}
+	}`)
+	numericFirst := grafanatui.RendererForPanel("table").Render(result, panel, 100, 8, nil)
+	if !strings.Contains(numericFirst, "TOTAL 2") {
+		t.Errorf("numeric-first table lost its row count:\n%s", numericFirst)
+	}
+	frame.Schema.Fields[0], frame.Schema.Fields[1] = frame.Schema.Fields[1], frame.Schema.Fields[0]
+	frame.Data.Values[0], frame.Data.Values[1] = frame.Data.Values[1], frame.Data.Values[0]
+	result.Results["A"] = grafana.QueryResultData{Frames: []grafana.DataFrame{frame}}
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,"footer":{"show":true,"reducer":["sum"],"fields":""}
+	}`)
+	for _, height := range []int{1, 2} {
+		constrained := grafanatui.RendererForPanel("table").Render(result, panel, 100, height, nil)
+		if !strings.Contains(constrained, "TOTAL") {
+			t.Errorf("height %d dropped the footer:\n%s", height, constrained)
+		}
+	}
+}
+
+func TestTableRenderer_NarrowColumnsRemainReadable(t *testing.T) {
+	t.Parallel()
+
+	renderer := grafanatui.RendererForPanel("table")
+	result := fixtureTableResult(
+		[]string{"cluster", "NotReady", "Total"},
+		[][]string{{"alpha", "1", "4"}},
+	)
+
+	output := renderer.Render(result, emptyPanel(), 16, 4, nil)
+	if !strings.Contains(output, "NotReady") {
+		t.Errorf("expected complete NotReady header in narrow table, got %q", output)
+	}
+}
+
 func TestTableRenderer_Truncation(t *testing.T) {
 	t.Parallel()
 
@@ -342,6 +459,28 @@ func TestTableRenderer_Truncation(t *testing.T) {
 
 	if !strings.Contains(output, "more rows") {
 		t.Error("expected truncation message in output")
+	}
+}
+
+func BenchmarkTableRendererLargeResult(b *testing.B) {
+	headers := make([]string, 10)
+	for index := range headers {
+		headers[index] = "column-" + strconv.Itoa(index)
+	}
+	rows := make([][]string, 10000)
+	for rowIndex := range rows {
+		rows[rowIndex] = make([]string, len(headers))
+		for columnIndex := range headers {
+			rows[rowIndex][columnIndex] = strconv.Itoa(rowIndex + columnIndex)
+		}
+	}
+	result := fixtureTableResult(headers, rows)
+	renderer := grafanatui.RendererForPanel("table")
+	panel := emptyPanel()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		renderer.Render(result, panel, 100, 10, nil)
 	}
 }
 

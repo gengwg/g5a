@@ -18,6 +18,25 @@ import (
 	"github.com/gengwg/g5a/grafana"
 )
 
+func TestAppHeaderUsesG5AName(t *testing.T) {
+	t.Parallel()
+
+	client, err := grafana.NewClient("https://grafana.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := NewApp(client, Options{}).renderHeader()
+	if !strings.Contains(header, " g5a") {
+		t.Errorf("header does not contain g5a: %q", header)
+	}
+	if strings.Contains(header, "grafana-tui") {
+		t.Errorf("header retains the upstream application name: %q", header)
+	}
+	if !strings.Contains(header, "https://grafana.example.com") {
+		t.Errorf("header does not contain the Grafana URL: %q", header)
+	}
+}
+
 func TestDashboardViewRendersRepeatedPanels(t *testing.T) {
 	t.Parallel()
 
@@ -511,6 +530,53 @@ func TestDashboardViewTimeChangeInvalidatesInflightQuery(t *testing.T) {
 	})
 	if _, exists := view.results["old"]; exists {
 		t.Fatal("old time-range result was accepted after invalidation")
+	}
+}
+
+func TestDashboardViewCachesRenderedBody(t *testing.T) {
+	t.Parallel()
+
+	view := newDashboardView(nil, "fixture")
+	instance := grafana.PanelInstance{Key: "panel", Panel: grafana.Panel{Type: "table"}}
+	newResult := func(value string) *grafana.QueryResult {
+		return &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+			"A": {Frames: []grafana.DataFrame{{
+				Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{{Name: "Value", Type: "string"}}},
+				Data:   grafana.DataFrameData{Values: []json.RawMessage{json.RawMessage(`["` + value + `"]`)}},
+			}}},
+		}}
+	}
+
+	result := newResult("first")
+	view.results[instance.Key] = result
+	first := view.renderPanelBody(instance, 40, 5)
+	if !strings.Contains(first, "first") {
+		t.Fatalf("initial body = %q, want first value", first)
+	}
+
+	// Results are immutable in production; changing this pointer's contents
+	// demonstrates that the second call uses the cached rendering.
+	result.Results["A"].Frames[0].Data.Values[0] = json.RawMessage(`["second"]`)
+	cached := view.renderPanelBody(instance, 40, 5)
+	if !strings.Contains(cached, "first") || strings.Contains(cached, "second") {
+		t.Fatalf("cached body = %q, want original rendering", cached)
+	}
+
+	view.results[instance.Key] = newResult("second")
+	updated := view.renderPanelBody(instance, 40, 5)
+	if !strings.Contains(updated, "second") {
+		t.Fatalf("updated body = %q, want new result", updated)
+	}
+}
+
+func TestDashboardRefreshInterval(t *testing.T) {
+	t.Parallel()
+
+	if got := dashboardRefreshInterval("0s"); got != 0 {
+		t.Errorf("disabled refresh = %v, want 0", got)
+	}
+	if got := dashboardRefreshInterval("5m"); got != 5*time.Minute {
+		t.Errorf("refresh = %v, want 5m", got)
 	}
 }
 

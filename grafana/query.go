@@ -27,6 +27,7 @@ type TimeRange struct {
 // QueryResult holds the result of a panel query.
 type QueryResult struct {
 	Results  map[string]QueryResultData `json:"results"`
+	Alerts   []AlertRule                `json:"-"`
 	Warnings []string                   `json:"-"`
 }
 
@@ -88,6 +89,7 @@ func (c *Client) QueryPanel(
 	}
 	result := &QueryResult{
 		Results:  make(map[string]QueryResultData),
+		Alerts:   nil,
 		Warnings: make([]string, 0),
 	}
 	if len(panel.Targets) == 0 {
@@ -378,6 +380,7 @@ func (c *Client) queryDatasource(
 	}
 	result := &QueryResult{
 		Results:  make(map[string]QueryResultData),
+		Alerts:   nil,
 		Warnings: make([]string, 0),
 	}
 	if err := c.doPostJSON(ctx, "/api/ds/query", request, result); err != nil {

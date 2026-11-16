@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -16,7 +17,10 @@ import (
 	"github.com/gengwg/g5a/grafana"
 )
 
-const legendLines = 2
+const (
+	legendLines        = 2
+	legendNameMaxWidth = 40
+)
 
 // timeSeriesRenderer renders time series data as a braille line chart.
 type timeSeriesRenderer struct{}
@@ -67,6 +71,9 @@ func (r *timeSeriesRenderer) Render(
 	if rightLegend {
 		chartWidth = max(width*2/3, 20)
 		chartHeight = height
+	}
+	if chartHeight < 3 {
+		return renderTinyTimeSeries(seriesData, seriesNames, width, height)
 	}
 
 	chart := timeserieslinechart.New(chartWidth, chartHeight,
@@ -302,6 +309,63 @@ func styleTimeSeriesDataSets(
 	}
 }
 
+func compactLegendName(name string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(name) <= width {
+		return name
+	}
+	name = trimLegendScheme(name)
+	if lipgloss.Width(name) <= width {
+		return name
+	}
+	if width == 1 {
+		return "…"
+	}
+
+	runes := []rune(name)
+	left := (width - 1) / 2
+	right := width - 1 - left
+	for left > 0 {
+		if left+right < len(runes) {
+			candidate := string(runes[:left]) + "…" + string(runes[len(runes)-right:])
+			if lipgloss.Width(candidate) <= width {
+				return candidate
+			}
+		}
+		left--
+		right = min(right+1, len(runes))
+	}
+
+	return truncateTableText(name, width)
+}
+
+func trimLegendScheme(name string) string {
+	for _, scheme := range []string{"https://", "http://"} {
+		start := legendSchemeIndex(name, scheme)
+		if start < 0 {
+			continue
+		}
+		parsed, err := url.Parse(name[start:])
+		if err == nil && parsed.Host != "" {
+			return name[:start] + name[start+len(scheme):]
+		}
+	}
+
+	return name
+}
+
+func legendSchemeIndex(name, scheme string) int {
+	for start := 0; start+len(scheme) <= len(name); start++ {
+		if strings.EqualFold(name[start:start+len(scheme)], scheme) {
+			return start
+		}
+	}
+
+	return -1
+}
+
 func buildLegendWithCalculations(
 	seriesNames []string,
 	seriesData map[string]timeSeriesEntry,
@@ -309,13 +373,56 @@ func buildLegendWithCalculations(
 	calculations []string,
 ) string {
 	parts := make([]string, 0, len(seriesNames))
+	seriesWidth := maxWidth
+	if len(seriesNames) > 0 {
+		seriesWidth = max((maxWidth-2*(len(seriesNames)-1))/len(seriesNames), 1)
+	}
 	for index, name := range seriesNames {
 		style := lipgloss.NewStyle().Foreground(chartColor(index))
-		text := "■ " + name + legendCalculations(seriesData[name], calculations)
+		calculationText := legendCalculations(seriesData[name], calculations)
+		nameWidth := min(
+			max(seriesWidth-2-lipgloss.Width(calculationText), 1),
+			legendNameMaxWidth,
+		)
+		name = compactLegendName(name, nameWidth)
+		text := "■ " + name + calculationText
 		parts = append(parts, style.Render(text))
 	}
 
-	return lipgloss.NewStyle().MaxWidth(maxWidth).Render(strings.Join(parts, "  "))
+	return packLegendParts(parts, maxWidth)
+}
+
+func packLegendParts(parts []string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	lines := make([]string, 0, legendLines)
+	current := make([]string, 0, len(parts))
+	currentWidth := 0
+	for _, part := range parts {
+		part = lipgloss.NewStyle().MaxWidth(maxWidth).Render(part)
+		partWidth := lipgloss.Width(part)
+		gapWidth := 0
+		if len(current) > 0 {
+			gapWidth = 2
+		}
+		if len(current) > 0 && currentWidth+gapWidth+partWidth > maxWidth {
+			lines = append(lines, strings.Join(current, "  "))
+			if len(lines) == legendLines {
+				return strings.Join(lines, "\n")
+			}
+			current = nil
+			currentWidth = 0
+			gapWidth = 0
+		}
+		current = append(current, part)
+		currentWidth += gapWidth + partWidth
+	}
+	if len(current) > 0 {
+		lines = append(lines, strings.Join(current, "  "))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func buildCalculatedLegend(
@@ -338,7 +445,10 @@ func buildCalculatedLegend(
 			break
 		}
 		style := lipgloss.NewStyle().Foreground(chartColor(index))
-		text := "■ " + name + legendCalculationValues(seriesData[name], calculations)
+		calculationText := legendCalculationValues(seriesData[name], calculations)
+		nameWidth := min(width-3-lipgloss.Width(calculationText), legendNameMaxWidth)
+		name = compactLegendName(name, nameWidth)
+		text := "■ " + name + calculationText
 		lines = append(lines, style.Render(truncateTableText(text, max(width-1, 1))))
 	}
 
@@ -365,6 +475,77 @@ func legendCalculationValues(entry timeSeriesEntry, calculations []string) strin
 	}
 
 	return "  " + strings.Join(values, "  ")
+}
+
+func renderTinyTimeSeries(
+	seriesData map[string]timeSeriesEntry,
+	seriesNames []string,
+	width int,
+	height int,
+) string {
+	if len(seriesNames) == 0 || width <= 0 || height <= 0 {
+		return ""
+	}
+	entry := seriesData[seriesNames[0]]
+	values := make([]float64, 0, len(entry.values))
+	for _, value := range entry.values {
+		if !math.IsNaN(value) && !math.IsInf(value, 0) {
+			values = append(values, value)
+		}
+	}
+	if len(values) == 0 {
+		return "no time series data"
+	}
+
+	last := values[len(values)-1]
+	valueText := presentField(entry.fieldConfig, entry.field, last).Text
+	chartWidth := max(width-len(valueText)-2, 1)
+	chart := sparkline(values, chartWidth)
+	line := truncateTableText(chart+" "+valueText, width)
+	if height > 1 {
+		line += "\n" + compactLegendName(seriesNames[0], width)
+	}
+
+	return line
+}
+
+func sparkline(values []float64, width int) string {
+	if width <= 0 || len(values) == 0 {
+		return ""
+	}
+	points := make([]float64, width)
+	for index := range points {
+		start := index * len(values) / width
+		end := (index + 1) * len(values) / width
+		if end <= start {
+			end = start + 1
+		}
+		minValue, maxValue := values[start], values[start]
+		for _, value := range values[start:end] {
+			minValue = min(minValue, value)
+			maxValue = max(maxValue, value)
+		}
+		points[index] = (minValue + maxValue) / 2
+	}
+
+	minPoint, maxPoint := points[0], points[0]
+	for _, point := range points {
+		minPoint = min(minPoint, point)
+		maxPoint = max(maxPoint, point)
+	}
+	levels := []rune("▁▂▃▄▅▆▇█")
+	result := make([]rune, len(points))
+	for index, point := range points {
+		var level int
+		if maxPoint > minPoint {
+			level = int((point - minPoint) / (maxPoint - minPoint) * float64(len(levels)-1))
+		} else {
+			level = len(levels) / 2
+		}
+		result[index] = levels[level]
+	}
+
+	return string(result)
 }
 
 //nolint:cyclop // calculation labels follow Grafana reducer names

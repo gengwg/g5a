@@ -340,16 +340,43 @@ func TestApplyTransformations_JoinWideFrameByLabel(t *testing.T) {
 	})
 
 	frame := result.Results["A"].Frames[0]
-	require.Len(t, frame.Schema.Fields, 5)
+	require.Len(t, frame.Schema.Fields, 3)
 	assert.Equal(t, "Value #A", frame.Schema.Fields[1].Name)
-	assert.Equal(t, "Value #A-2", frame.Schema.Fields[2].Name)
-	assert.Equal(t, "Value #B", frame.Schema.Fields[3].Name)
-	assert.Equal(t, "Value #B-2", frame.Schema.Fields[4].Name)
+	assert.Equal(t, "Value #B", frame.Schema.Fields[2].Name)
 	assert.JSONEq(t, `["api","web"]`, string(frame.Data.Values[0]))
-	assert.JSONEq(t, `[1,null]`, string(frame.Data.Values[1]))
-	assert.JSONEq(t, `[null,2]`, string(frame.Data.Values[2]))
-	assert.JSONEq(t, `[10,null]`, string(frame.Data.Values[3]))
-	assert.JSONEq(t, `[null,20]`, string(frame.Data.Values[4]))
+	assert.JSONEq(t, `[1,2]`, string(frame.Data.Values[1]))
+	assert.JSONEq(t, `[10,20]`, string(frame.Data.Values[2]))
+}
+
+func TestApplyTransformations_OrganizeRenamesAllDuplicateFields(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+				{Name: "Value", Type: "number", Labels: map[string]string{"cluster": "beta"}},
+			},
+			`[1000]`, `[1]`, `[2]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{
+		{ID: "joinByField", Options: json.RawMessage(`{"byField":"cluster","mode":"outer"}`)},
+		{ID: "filterFieldsByName", Options: json.RawMessage(
+			`{"include":{"pattern":"^(cluster|Value #A)$"}}`,
+		)},
+		{ID: "organize", Options: json.RawMessage(
+			`{"renameByName":{"Value #A":"NotReady"}}`,
+		)},
+	})
+
+	frame := result.Results["A"].Frames[0]
+	require.Len(t, frame.Schema.Fields, 2)
+	assert.Equal(t, "NotReady", frame.Schema.Fields[1].Name)
+	assert.JSONEq(t, `[1,2]`, string(frame.Data.Values[1]))
 }
 
 func TestApplyTransformations_UnsupportedWarns(t *testing.T) {

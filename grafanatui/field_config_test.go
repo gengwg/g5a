@@ -815,8 +815,22 @@ func TestPresentFieldDatasourceDisplayName(t *testing.T) {
 		Config: json.RawMessage(`{"displayNameFromDS":"{cluster=\"alpha\"}"}`),
 	}
 	got := presentField(nil, field, 1.0)
-	if got.DisplayName != `{cluster="alpha"}` {
-		t.Errorf("display name = %q, want datasource-provided name", got.DisplayName)
+	if got.DisplayName != "alpha" {
+		t.Errorf("display name = %q, want compact label value", got.DisplayName)
+	}
+
+	metric := field
+	metric.Config = json.RawMessage(`{
+		"displayNameFromDS":"namespace_workload:cpu_usage:sum{namespace=\"argo-rollouts\"}"
+	}`)
+	if got := presentField(nil, metric, 1.0); got.DisplayName != "namespace_workload:cpu_usage:sum" {
+		t.Errorf("display name = %q, want metric name without labels", got.DisplayName)
+	}
+
+	quoted := field
+	quoted.Config = json.RawMessage(`{"displayNameFromDS":"{vendor=\"Dell, Inc.\"}"}`)
+	if got := presentField(nil, quoted, 1.0); got.DisplayName != "Dell, Inc." {
+		t.Errorf("display name = %q, want quoted comma value preserved", got.DisplayName)
 	}
 
 	overridden := presentField(
