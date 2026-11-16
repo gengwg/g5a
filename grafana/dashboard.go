@@ -58,6 +58,9 @@ type Dashboard struct {
 	Templating Templating      `json:"templating"`
 	Time       DashboardTime   `json:"time"`
 	Refresh    RefreshInterval `json:"refresh"`
+	Timezone   string          `json:"timezone,omitempty"`
+	WeekStart  string          `json:"weekStart,omitempty"`
+	NowDelay   string          `json:"nowDelay,omitempty"`
 }
 
 // Panel represents a single panel within a dashboard.
@@ -76,6 +79,7 @@ type Panel struct {
 	RepeatDirection string           `json:"repeatDirection,omitempty"`
 	MaxPerRow       int              `json:"maxPerRow,omitempty"`
 	Collapsed       bool             `json:"collapsed,omitempty"`
+	Timezone        string           `json:"-"`
 	row             *panelRow
 }
 

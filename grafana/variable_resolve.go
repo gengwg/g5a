@@ -14,7 +14,10 @@ import (
 	"strings"
 )
 
-const variableTypeCustom = "custom"
+const (
+	variableTypeCustom = "custom"
+	grafanaTimeNow     = "now"
+)
 
 var (
 	errNoDatasource      = errors.New("no datasource for variable")
@@ -32,7 +35,7 @@ func (c *Client) ResolveVariableOptions(
 	return c.ResolveVariableOptionsWithTimeRange(
 		ctx,
 		variables,
-		TimeRange{From: "now-1h", To: "now"},
+		TimeRange{From: "now-1h", To: grafanaTimeNow, Timezone: "", WeekStart: "", NowDelay: ""},
 	)
 }
 

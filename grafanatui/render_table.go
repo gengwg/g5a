@@ -109,7 +109,7 @@ func (r *tableRenderer) Render(
 
 	totalRowCount := len(rows)
 	visibleRows := rows[:min(len(rows), max(height, 0))]
-	presented := presentTableRows(visibleRows, columns, panel.FieldConfig)
+	presented := presentTableRows(visibleRows, columns, panel.FieldConfig, panel.Timezone)
 	footerRows := presentTableFooter(rows, columns, panel.FieldConfig, options.Footer)
 	widthRows := append(append([][]fieldPresentation{}, presented...), footerRows...)
 	colWidths := calculateColumnWidths(columns, widthRows, width)
@@ -420,6 +420,7 @@ func presentTableRows(
 	rows []tableRow,
 	columns []tableColumn,
 	fieldConfig json.RawMessage,
+	timezone string,
 ) [][]fieldPresentation {
 	presented := make([][]fieldPresentation, len(rows))
 	for rowIndex, row := range rows {
@@ -434,6 +435,7 @@ func presentTableRows(
 				presented[rowIndex][columnIndex].Text = formatTableTime(
 					row.values[columnIndex],
 					presented[rowIndex][columnIndex].Text,
+					timezone,
 				)
 			}
 		}
@@ -574,7 +576,7 @@ func footerIncludesField(column tableColumn, fields []string) bool {
 	return false
 }
 
-func formatTableTime(value any, fallback string) string {
+func formatTableTime(value any, fallback string, timezone string) string {
 	if value == nil {
 		return fallback
 	}
@@ -583,8 +585,7 @@ func formatTableTime(value any, fallback string) string {
 		return fallback
 	}
 
-	//nolint:gosmopolitan // table timestamps use the viewer's local timezone
-	return time.UnixMilli(int64(milliseconds)).In(time.Local).Format("2006-01-02 15:04:05")
+	return time.UnixMilli(int64(milliseconds)).In(grafana.TimeRangeLocation(timezone)).Format("2006-01-02 15:04:05")
 }
 
 func calculateColumnWidths(

@@ -101,8 +101,8 @@ func (t *timeRangePickerView) selectTimeRange() (view, tea.Cmd) {
 	}
 
 	timeRange := grafana.TimeRange{
-		From: selected.from,
-		To:   selected.to,
+		From: selected.from, To: selected.to,
+		Timezone: "", WeekStart: "", NowDelay: "",
 	}
 
 	return t, func() tea.Msg {

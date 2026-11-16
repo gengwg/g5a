@@ -29,7 +29,8 @@ func TestGetDashboardV2GridLayout(t *testing.T) {
 			"apiVersion":"dashboard.grafana.app/v2",
 			"spec":{
 				"title":"V2 demo",
-				"timeSettings":{"from":"now-3h","to":"now","autoRefresh":"30s"},
+				"timeSettings":{"from":"now-3h","to":"now","autoRefresh":"30s",
+				"timezone":"UTC","weekStart":"monday","nowDelay":"1h"},
 				"elements":{"panel-7":{
 					"kind":"Panel",
 					"spec":{
@@ -71,6 +72,9 @@ func TestGetDashboardV2GridLayout(t *testing.T) {
 	assert.Equal(t, "V2 demo", dashboard.Title)
 	assert.Equal(t, "now-3h", dashboard.Time.From)
 	assert.Equal(t, grafana.RefreshInterval("30s"), dashboard.Refresh)
+	assert.Equal(t, "UTC", dashboard.Timezone)
+	assert.Equal(t, "monday", dashboard.WeekStart)
+	assert.Equal(t, "1h", dashboard.NowDelay)
 	require.Len(t, dashboard.Panels, 1)
 	panel := dashboard.Panels[0]
 	assert.Equal(t, 7, panel.ID)

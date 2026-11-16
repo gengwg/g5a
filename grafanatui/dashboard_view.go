@@ -83,7 +83,7 @@ func newDashboardView(client *grafana.Client, uid string) *dashboardView {
 		errors:    make(map[string]error),
 		loading:   make(map[string]bool),
 		bodyCache: make(map[string]panelBodyCache),
-		timeRange: grafana.TimeRange{From: defaultTimeFrom, To: timeNow},
+		timeRange: grafana.TimeRange{From: defaultTimeFrom, To: timeNow, Timezone: "", WeekStart: "", NowDelay: ""},
 		semaphore: make(chan struct{}, dashboardQueryConcurrency),
 	}
 }
@@ -135,9 +135,15 @@ func (d *dashboardView) handleDashboardLoaded(
 	d.err = nil
 	if !d.preserveTimeRange && d.dashboard.Time.From != "" && d.dashboard.Time.To != "" {
 		d.timeRange = grafana.TimeRange{
-			From: d.dashboard.Time.From,
-			To:   d.dashboard.Time.To,
+			From: d.dashboard.Time.From, To: d.dashboard.Time.To,
+			Timezone: "", WeekStart: "", NowDelay: "",
 		}
+	}
+	d.timeRange.Timezone = d.dashboard.Timezone
+	d.timeRange.WeekStart = d.dashboard.WeekStart
+	d.timeRange.NowDelay = d.dashboard.NowDelay
+	for index := range msg.dashboard.Panels {
+		msg.dashboard.Panels[index].Timezone = d.dashboard.Timezone
 	}
 	if !d.refreshSet {
 		d.refresh = dashboardRefreshInterval(string(d.dashboard.Refresh))

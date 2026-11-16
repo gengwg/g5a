@@ -62,7 +62,7 @@ func newPanelView(client *grafana.Client, uid string) *panelView {
 		loading:         true,
 		width:           0,
 		height:          0,
-		timeRange:       grafana.TimeRange{From: defaultTimeFrom, To: timeNow},
+		timeRange:       grafana.TimeRange{From: defaultTimeFrom, To: timeNow, Timezone: "", WeekStart: "", NowDelay: ""},
 		err:             nil,
 		hiddenSeries:    nil,
 		variableValues:  nil,
@@ -150,9 +150,15 @@ func (p *panelView) handleDashboardLoaded(msg dashboardLoadedMsg) (view, tea.Cmd
 	p.dashboard = msg.dashboard
 	if !p.preserveTimeRange && p.dashboard.Time.From != "" && p.dashboard.Time.To != "" {
 		p.timeRange = grafana.TimeRange{
-			From: p.dashboard.Time.From,
-			To:   p.dashboard.Time.To,
+			From: p.dashboard.Time.From, To: p.dashboard.Time.To,
+			Timezone: "", WeekStart: "", NowDelay: "",
 		}
+	}
+	p.timeRange.Timezone = p.dashboard.Timezone
+	p.timeRange.WeekStart = p.dashboard.WeekStart
+	p.timeRange.NowDelay = p.dashboard.NowDelay
+	for index := range msg.dashboard.Panels {
+		msg.dashboard.Panels[index].Timezone = p.dashboard.Timezone
 	}
 	p.panels = grafana.FlattenPanels(msg.dashboard.Panels)
 

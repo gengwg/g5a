@@ -28,6 +28,46 @@ func TestResolveBuiltinVariablesRateInterval(t *testing.T) {
 	}
 }
 
+func TestResolveTimeRangeAtHonorsTimezoneWeekStartAndDelay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 15, 2, 0, 0, 0, time.UTC)
+	from, to := resolveTimeRangeAt(TimeRange{
+		From: "now/d", To: "now/d", Timezone: "UTC", WeekStart: "", NowDelay: "",
+	}, now)
+	wantFrom := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC).UnixMilli()
+	wantTo := time.Date(2026, 11, 15, 23, 59, 59, 999*int(time.Millisecond), time.UTC).UnixMilli()
+	if from != wantFrom || to != wantTo {
+		t.Errorf("UTC range = %d/%d, want %d/%d", from, to, wantFrom, wantTo)
+	}
+
+	from, _ = resolveTimeRangeAt(TimeRange{
+		From: "now/d", To: "now/d", Timezone: "America/Los_Angeles", WeekStart: "", NowDelay: "",
+	}, now)
+	location, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFrom = time.Date(2026, 11, 14, 0, 0, 0, 0, location).UnixMilli()
+	if from != wantFrom {
+		t.Errorf("Los Angeles day start = %d, want %d", from, wantFrom)
+	}
+
+	from, _ = resolveTimeRangeAt(TimeRange{
+		From: "now/w", To: "now/w", WeekStart: "monday", Timezone: "UTC", NowDelay: "",
+	}, now)
+	wantFrom = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if from != wantFrom {
+		t.Errorf("Monday week start = %d, want %d", from, wantFrom)
+	}
+
+	from, _ = resolveTimeRangeAt(TimeRange{From: "now", To: "now", NowDelay: "1h", Timezone: "UTC", WeekStart: ""}, now)
+	wantFrom = now.Add(-time.Hour).UnixMilli()
+	if from != wantFrom {
+		t.Errorf("now delay = %d, want %d", from, wantFrom)
+	}
+}
+
 func TestResolveTimeRangeAtRounding(t *testing.T) {
 	t.Parallel()
 
@@ -78,8 +118,8 @@ func TestResolveTimeRangeAtRounding(t *testing.T) {
 		t.Run(test.unit, func(t *testing.T) {
 			t.Parallel()
 			from, to := resolveTimeRangeAt(TimeRange{
-				From: "now/" + test.unit,
-				To:   "now/" + test.unit,
+				From: "now/" + test.unit, To: "now/" + test.unit,
+				Timezone: "", WeekStart: "", NowDelay: "",
 			}, now)
 			if want := test.start.UnixMilli(); from != want {
 				t.Errorf("from = %d, want %d", from, want)
@@ -95,7 +135,9 @@ func TestResolveTimeRangeAtRelativeRounding(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2024, time.May, 15, 14, 35, 42, 123456789, time.UTC)
-	from, to := resolveTimeRangeAt(TimeRange{From: "now-24h/h", To: "now/h"}, now)
+	from, to := resolveTimeRangeAt(TimeRange{
+		From: "now-24h/h", To: "now/h", Timezone: "", WeekStart: "", NowDelay: "",
+	}, now)
 	wantFrom := time.Date(2024, time.May, 14, 14, 0, 0, 0, time.UTC).UnixMilli()
 	wantTo := time.Date(2024, time.May, 15, 15, 0, 0, 0, time.UTC).
 		Add(-time.Millisecond).UnixMilli()
@@ -111,7 +153,7 @@ func TestResolveTimeRangeAtAlignedRounding(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2024, time.May, 15, 14, 0, 0, 0, time.UTC)
-	from, to := resolveTimeRangeAt(TimeRange{From: "now/h", To: "now/h"}, now)
+	from, to := resolveTimeRangeAt(TimeRange{From: "now/h", To: "now/h", Timezone: "", WeekStart: "", NowDelay: ""}, now)
 	if from != now.UnixMilli() {
 		t.Errorf("from = %d, want aligned hour %d", from, now.UnixMilli())
 	}

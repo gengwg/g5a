@@ -39,6 +39,9 @@ type dashboardV2Spec struct {
 type dashboardV2TimeSettings struct {
 	From        string          `json:"from"`
 	To          string          `json:"to"`
+	Timezone    string          `json:"timezone"`
+	WeekStart   string          `json:"weekStart"`
+	NowDelay    string          `json:"nowDelay"`
 	AutoRefresh RefreshInterval `json:"autoRefresh"`
 }
 
@@ -275,6 +278,9 @@ func (spec dashboardV2Spec) classicDashboard() (*Dashboard, error) {
 		Templating: Templating{List: variables},
 		Time:       DashboardTime{From: spec.TimeSettings.From, To: spec.TimeSettings.To},
 		Refresh:    spec.TimeSettings.AutoRefresh,
+		Timezone:   spec.TimeSettings.Timezone,
+		WeekStart:  spec.TimeSettings.WeekStart,
+		NowDelay:   spec.TimeSettings.NowDelay,
 	}, nil
 }
 
@@ -350,7 +356,7 @@ func (layout dashboardV2Layout) gridPanels(
 			FieldConfig: element.Spec.VizConfig.Spec.FieldConfig,
 			Options:     element.Spec.VizConfig.Spec.Options,
 			Targets:     nil, Datasource: nil, Panels: nil, Transformations: nil,
-			Repeat: "", RepeatDirection: "", MaxPerRow: 0, Collapsed: false, row: nil,
+			Repeat: "", RepeatDirection: "", MaxPerRow: 0, Collapsed: false, Timezone: "", row: nil,
 		}
 		if panel.ID == 0 {
 			panel.ID = ids.nextID()
@@ -551,7 +557,8 @@ func (layout dashboardV2Layout) tabsPanels(
 			GridPos:     GridPos{H: 2, W: dashboardV2GridColumns, X: 0, Y: yOffset},
 			FieldConfig: nil,
 			Options:     mustMarshal(map[string]string{"content": "## " + title}),
-			Panels:      nil, Transformations: nil, Repeat: "", RepeatDirection: "", MaxPerRow: 0, Collapsed: false, row: nil,
+			Panels:      nil, Transformations: nil, Repeat: "", RepeatDirection: "", MaxPerRow: 0,
+			Collapsed: false, Timezone: "", row: nil,
 		}
 		tabPanels, err := tab.Spec.Layout.panelsAtOffset(elements, yOffset+2, ids)
 		if err != nil {

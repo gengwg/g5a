@@ -261,6 +261,13 @@ func TestTableRenderer_FormatsTimeFields(t *testing.T) {
 	if !strings.Contains(output, want) {
 		t.Errorf("output does not contain formatted timestamp %q:\n%s", want, output)
 	}
+	output = grafanatui.RendererForPanel("table").Render(
+		result, grafana.Panel{Timezone: "UTC"}, 60, 5, nil,
+	)
+	want = time.UnixMilli(1700000000000).UTC().Format("2006-01-02 15:04:05")
+	if !strings.Contains(output, want) {
+		t.Errorf("UTC output does not contain formatted timestamp %q:\n%s", want, output)
+	}
 }
 
 func TestTextRenderer(t *testing.T) {

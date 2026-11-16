@@ -20,8 +20,11 @@ var (
 
 // TimeRange represents a Grafana time range.
 type TimeRange struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Timezone  string `json:"timezone,omitempty"`
+	WeekStart string `json:"weekStart,omitempty"`
+	NowDelay  string `json:"nowDelay,omitempty"`
 }
 
 // QueryResult holds the result of a panel query.
@@ -479,15 +482,57 @@ func resolveTimeRange(timeRange TimeRange) (fromMs, toMs int64) {
 }
 
 func resolveTimeRangeAt(timeRange TimeRange, now time.Time) (fromMs, toMs int64) {
-	return resolveTimeToMsAtWithRounding(timeRange.From, now, false),
-		resolveTimeToMsAtWithRounding(timeRange.To, now, true)
+	location := TimeRangeLocation(timeRange.Timezone)
+	if timeRange.Timezone == "" || strings.EqualFold(timeRange.Timezone, "browser") {
+		location = nil
+	}
+	if delay := timeRangeNowDelay(timeRange.NowDelay); delay != 0 {
+		now = now.Add(-delay)
+	}
+
+	return resolveTimeToMsAtWithRounding(timeRange.From, now, false, timeRange.WeekStart, location),
+		resolveTimeToMsAtWithRounding(timeRange.To, now, true, timeRange.WeekStart, location)
 }
 
+//nolint:gosmopolitan // browser timezone intentionally uses the host location
+func TimeRangeLocation(timezone string) *time.Location {
+	if timezone == "" || strings.EqualFold(timezone, "browser") {
+		return time.Local
+	}
+	if strings.EqualFold(timezone, "utc") {
+		return time.UTC
+	}
+	if location, err := time.LoadLocation(timezone); err == nil {
+		return location
+	}
+
+	return time.Local
+}
+
+func timeRangeNowDelay(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0
+	}
+
+	return duration
+}
+
+//nolint:gosmopolitan // browser default also applies to unzoned callers
 func resolveTimeToMsAt(value string, now time.Time) int64 {
-	return resolveTimeToMsAtWithRounding(value, now, false)
+	return resolveTimeToMsAtWithRounding(value, now, false, "", time.Local)
 }
 
-func resolveTimeToMsAtWithRounding(value string, now time.Time, roundUp bool) int64 {
+func resolveTimeToMsAtWithRounding(
+	value string,
+	now time.Time,
+	roundUp bool,
+	weekStart string,
+	location *time.Location,
+) int64 {
 	if epochMs, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return epochMs
 	}
@@ -505,15 +550,20 @@ func resolveTimeToMsAtWithRounding(value string, now time.Time, roundUp bool) in
 		resolved = subtractDuration(resolved, matches[1], matches[2])
 	}
 	if matches[3] != "" {
-		resolved = roundTimeToUnit(resolved, matches[3], roundUp)
+		resolved = roundTimeToUnit(resolved, matches[3], roundUp, weekStart, location)
 	}
 
 	return resolved.UnixMilli()
 }
 
-func roundTimeToUnit(value time.Time, unit string, roundUp bool) time.Time {
+//nolint:cyclop // unit-specific rounding rules and timezone/week-start handling
+func roundTimeToUnit(value time.Time, unit string, roundUp bool, weekStart string, location *time.Location) time.Time {
 	var start, next time.Time
-	location := value.Location()
+	if location == nil {
+		location = value.Location()
+	} else {
+		value = value.In(location)
+	}
 
 	switch unit {
 	case "s":
@@ -543,7 +593,11 @@ func roundTimeToUnit(value time.Time, unit string, roundUp bool) time.Time {
 		start = time.Date(
 			value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, location,
 		)
-		start = start.AddDate(0, 0, -int(start.Weekday()))
+		offset := int(start.Weekday())
+		if strings.EqualFold(weekStart, "monday") || strings.EqualFold(weekStart, "mon") {
+			offset = (offset + 6) % 7
+		}
+		start = start.AddDate(0, 0, -offset)
 		next = start.AddDate(0, 0, 7)
 	case "M":
 		start = time.Date(value.Year(), value.Month(), 1, 0, 0, 0, 0, location)
