@@ -69,6 +69,13 @@ func TestFormatValue(t *testing.T) {
 		{name: "custom count", value: 52, unit: "count:requests", expected: "52 requests"},
 		{name: "scaled custom count", value: 1500, unit: "count:requests", expected: "1.5K requests"},
 		{name: "plain GPU hours", value: 52, unit: "GPU-h", expected: "52 GPU-h"},
+		{name: "celsius", value: 11.3, unit: "celsius", expected: "11.3 °C"},
+		{name: "fahrenheit", value: 52.3, unit: "fahrenheit", expected: "52.3 °F"},
+		{name: "kelvin", value: 284.2, unit: "kelvin", expected: "284.2 K"},
+		{name: "meters per second", value: 100.8, unit: "velocityms", expected: "100.8 m/s"},
+		{name: "kilometers per hour", value: 42.5, unit: "velocitykmh", expected: "42.5 km/h"},
+		{name: "miles per hour", value: 42.5, unit: "velocitymph", expected: "42.5 mph"},
+		{name: "knots", value: 42.5, unit: "velocityknot", expected: "42.5 kn"},
 
 		// edge cases
 		{name: "zero", value: 0, unit: "short", expected: "0"},

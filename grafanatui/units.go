@@ -50,29 +50,36 @@ const (
 // unitFormatters maps Grafana unit strings to their formatting functions. A nil
 // decimal count preserves the unit's default precision.
 var unitFormatters = map[string]func(float64, *int) string{ //nolint:gochecknoglobals // read-only registry
-	"short":       formatSI,
-	"":            formatSI,
-	"bytes":       formatBinaryBytes,
-	"decbytes":    formatDecimalBytes,
-	"bits":        formatBits,
-	"s":           formatSeconds,
-	"ms":          formatMilliseconds,
-	"ns":          formatNanoseconds,
-	"percent":     formatPercent,
-	"percentunit": formatPercentUnit,
-	"reqps":       formatReqPerSec,
-	"ops":         formatOpsPerSec,
-	"none":        formatRawNumber,
-	"Bps":         formatBytesPerSec,
-	"binBps":      formatBinaryBytesPerSec,
-	"decBps":      formatDecimalBytesPerSec,
-	"bps":         formatBitsPerSec,
-	"pps":         formatPacketsPerSec,
-	"iops":        formatIOPS,
-	"hertz":       formatHertz,
-	"watt":        formatWatt,
-	"kwatt":       formatKilowatt,
-	"voltamp":     formatVoltAmp,
+	"short":        formatSI,
+	"":             formatSI,
+	"bytes":        formatBinaryBytes,
+	"decbytes":     formatDecimalBytes,
+	"bits":         formatBits,
+	"s":            formatSeconds,
+	"ms":           formatMilliseconds,
+	"ns":           formatNanoseconds,
+	"percent":      formatPercent,
+	"percentunit":  formatPercentUnit,
+	"reqps":        formatReqPerSec,
+	"ops":          formatOpsPerSec,
+	"none":         formatRawNumber,
+	"Bps":          formatBytesPerSec,
+	"binBps":       formatBinaryBytesPerSec,
+	"decBps":       formatDecimalBytesPerSec,
+	"bps":          formatBitsPerSec,
+	"pps":          formatPacketsPerSec,
+	"iops":         formatIOPS,
+	"hertz":        formatHertz,
+	"watt":         formatWatt,
+	"kwatt":        formatKilowatt,
+	"voltamp":      formatVoltAmp,
+	"celsius":      formatCelsius,
+	"fahrenheit":   formatFahrenheit,
+	"kelvin":       formatKelvin,
+	"velocityms":   formatVelocityMetersPerSecond,
+	"velocitykmh":  formatVelocityKilometersPerHour,
+	"velocitymph":  formatVelocityMilesPerHour,
+	"velocityknot": formatVelocityKnots,
 }
 
 const (
@@ -442,6 +449,34 @@ func formatUnitNumber(value float64, suffix string, decimals *int) string {
 // appends a suffix.
 func trimTrailingZeros(value float64, suffix string) string {
 	return fmt.Sprintf("%.1f%s", value, suffix)
+}
+
+func formatCelsius(value float64, decimals *int) string {
+	return formatUnitNumber(value, " °C", decimals)
+}
+
+func formatFahrenheit(value float64, decimals *int) string {
+	return formatUnitNumber(value, " °F", decimals)
+}
+
+func formatKelvin(value float64, decimals *int) string {
+	return formatUnitNumber(value, " K", decimals)
+}
+
+func formatVelocityMetersPerSecond(value float64, decimals *int) string {
+	return formatUnitNumber(value, " m/s", decimals)
+}
+
+func formatVelocityKilometersPerHour(value float64, decimals *int) string {
+	return formatUnitNumber(value, " km/h", decimals)
+}
+
+func formatVelocityMilesPerHour(value float64, decimals *int) string {
+	return formatUnitNumber(value, " mph", decimals)
+}
+
+func formatVelocityKnots(value float64, decimals *int) string {
+	return formatUnitNumber(value, " kn", decimals)
 }
 
 // fieldConfigDefaults is the parsed structure for extracting the
