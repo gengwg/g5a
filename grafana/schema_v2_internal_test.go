@@ -4,6 +4,7 @@ package grafana
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"testing"
 )
@@ -28,6 +29,42 @@ func TestDashboardNamespace(t *testing.T) {
 			client := &Client{orgID: test.orgID, baseURL: &url.URL{Scheme: "https", Host: test.host}}
 			if got := client.dashboardNamespace(); got != test.want {
 				t.Errorf("namespace = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAutoGridColumnWidthModes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mode    string
+		width   int
+		max     int
+		columns int
+	}{
+		{name: "narrow", mode: autoGridColumnNarrow, max: 10, columns: 6},
+		{name: "standard", mode: "standard", max: 10, columns: 3},
+		{name: "wide", mode: autoGridColumnWide, max: 10, columns: 1},
+		{name: "custom", mode: "custom", width: 300, max: 10, columns: 4},
+		{name: "custom wide", mode: "custom", width: 672, max: 10, columns: 2},
+		{name: "maximum cap", mode: "custom", width: 1, max: 10, columns: 10},
+		{name: "default maximum", mode: autoGridColumnNarrow, max: 0, columns: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			raw := fmt.Sprintf(
+				`{"spec":{"maxColumnCount":%d,"columnWidthMode":%q,"columnWidth":%d}}`,
+				test.max, test.mode, test.width,
+			)
+			var layout dashboardV2Layout
+			if err := json.Unmarshal([]byte(raw), &layout); err != nil {
+				t.Fatal(err)
+			}
+			if got := layout.autoGridColumns(); got != test.columns {
+				t.Errorf("columns = %d, want %d", got, test.columns)
 			}
 		})
 	}
@@ -60,6 +97,28 @@ func TestClassicV2VariableHideModes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestClassicV2IntervalVariableAuto(t *testing.T) {
+	t.Parallel()
+
+	variable, err := classicV2Variable(dashboardV2Variable{
+		Kind: v2IntervalVariableKind,
+		Spec: json.RawMessage(`{
+			"name":"summarize","query":"1m,10m","refresh":"onTimeRangeChanged",
+			"auto":true,"auto_min":"2m","auto_count":30,
+			"current":{"text":"$__auto","value":"$__auto"}
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if variable.Type != variableTypeInterval || !variable.Auto {
+		t.Errorf("interval Auto = type %q, auto %v", variable.Type, variable.Auto)
+	}
+	if variable.AutoMin != "2m" || variable.AutoCount != 30 || variable.Refresh != 2 {
+		t.Errorf("Auto settings = %q/%d, refresh %d", variable.AutoMin, variable.AutoCount, variable.Refresh)
 	}
 }
 

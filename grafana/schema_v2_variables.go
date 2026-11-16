@@ -8,6 +8,7 @@ import (
 
 const (
 	v2CustomVariableKind    = "CustomVariable"
+	v2IntervalVariableKind  = "IntervalVariable"
 	v2SwitchVariableKind    = "SwitchVariable"
 	v2SwitchEnabledDefault  = "true"
 	v2SwitchDisabledDefault = "false"
@@ -80,6 +81,11 @@ type v2VariableCommon struct {
 	Refresh    string                  `json:"refresh"`
 	Sort       string                  `json:"sort"`
 	Hide       v2VariableHide          `json:"hide"`
+	Auto       bool                    `json:"auto"`
+	//nolint:tagliatelle // Grafana's interval variable schema uses snake_case.
+	AutoMin string `json:"auto_min"`
+	//nolint:tagliatelle // Grafana's interval variable schema uses snake_case.
+	AutoCount int `json:"auto_count"`
 }
 
 func (common v2VariableCommon) classic() TemplateVariable {
@@ -88,6 +94,7 @@ func (common v2VariableCommon) classic() TemplateVariable {
 		AllValue: common.AllValue, Multi: common.Multi, Definition: "", Query: nil,
 		Datasource: nil, Options: classicV2Options(common.Options), Regex: common.Regex,
 		Sort: classicVariableSort(common.Sort), Refresh: classicVariableRefresh(common.Refresh), Hide: int(common.Hide),
+		Auto: common.Auto, AutoMin: common.AutoMin, AutoCount: common.AutoCount,
 	}
 }
 
@@ -190,8 +197,8 @@ func classicV2Variable(source dashboardV2Variable) (TemplateVariable, error) {
 		return classicSimpleV2Variable(source, "constant")
 	case "TextVariable":
 		return classicSimpleV2Variable(source, "textbox")
-	case "IntervalVariable":
-		return classicSimpleV2Variable(source, "interval")
+	case v2IntervalVariableKind:
+		return classicSimpleV2Variable(source, variableTypeInterval)
 	case v2SwitchVariableKind:
 		return classicSwitchV2Variable(source)
 	default:

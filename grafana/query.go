@@ -311,6 +311,7 @@ func buildDSQueryTarget(
 	}
 
 	scrapeIntervalMs = targetScrapeIntervalMs(targetMap, scrapeIntervalMs)
+	overrides = resolveIntervalAutoOverrides(variables, overrides, rangeMs)
 	interpolated := interpolateTargetValue(
 		targetMap,
 		variables,
@@ -371,6 +372,37 @@ func targetScrapeIntervalMs(targetMap map[string]any, fallback int) int {
 	}
 
 	return fallback
+}
+
+func resolveIntervalAutoOverrides(
+	variables []TemplateVariable,
+	overrides map[string]string,
+	rangeMs int64,
+) map[string]string {
+	resolved := maps.Clone(overrides)
+	if resolved == nil {
+		resolved = make(map[string]string)
+	}
+	for _, variable := range variables {
+		if variable.Type != variableTypeInterval || !variable.Auto {
+			continue
+		}
+		selected := resolved[variable.Name]
+		if selected == "" {
+			selected = resolveCurrentValue(variable)
+		}
+		if !isIntervalAutoSelection(variable, selected) {
+			continue
+		}
+		count := variable.AutoCount
+		if count <= 0 {
+			count = 30
+		}
+		interval := max(rangeMs/int64(count), int64(parseDurationMs(variable.AutoMin)), 1)
+		resolved[variable.Name] = formatDuration(int(interval))
+	}
+
+	return resolved
 }
 
 func interpolateTargetValue(

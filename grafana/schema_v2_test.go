@@ -377,6 +377,43 @@ func TestGetDashboardV2UsesOrgNamespace(t *testing.T) {
 	assert.Equal(t, "2", gotOrgID)
 }
 
+func TestGetDashboardV2Beta1TransformationID(t *testing.T) {
+	t.Parallel()
+
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Beta transformation",
+			"elements":{"panel-1":{"kind":"Panel","spec":{
+				"id":1,"title":"Panel 1","vizConfig":{"group":"stat","spec":{}},
+				"data":{"spec":{"queries":[],"transformations":[{
+					"kind":"limit","spec":{"id":"limit","options":{"limit":10}}
+				}]}}
+			}}},
+			"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+		}
+	}`, v2TestItem(1, "GridLayoutItem"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/dashboards/uid/demo" {
+			http.Error(w, "legacy unavailable", http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path != "/apis/dashboard.grafana.app/v2beta1/namespaces/default/dashboards/demo" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(resource))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 1)
+	require.Len(t, dashboard.Panels[0].Transformations, 1)
+	assert.Equal(t, "limit", dashboard.Panels[0].Transformations[0].ID)
+	assert.JSONEq(t, `{"limit":10}`, string(dashboard.Panels[0].Transformations[0].Options))
+}
+
 func TestGetDashboardV2NestedRowRepeats(t *testing.T) {
 	t.Parallel()
 
@@ -541,6 +578,43 @@ func TestGetDashboardV2AutoGrid(t *testing.T) {
 		{H: 4, W: 12, X: 12, Y: 0},
 		{H: 4, W: 12, X: 0, Y: 4},
 		{H: 4, W: 12, X: 12, Y: 4},
+	}
+	for index, panel := range dashboard.Panels {
+		assert.Equal(t, want[index], panel.GridPos)
+	}
+}
+
+func TestGetDashboardV2AutoGridCustomPixels(t *testing.T) {
+	t.Parallel()
+
+	elements := make([]string, 0, 4)
+	items := make([]string, 0, 4)
+	for id := 1; id <= 4; id++ {
+		elements = append(elements, v2TestElement(id))
+		items = append(items, v2TestItem(id, "AutoGridLayoutItem"))
+	}
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Auto custom",
+			"elements":{%s},
+			"layout":{"kind":"AutoGridLayout","spec":{
+				"maxColumnCount":10,"columnWidthMode":"custom","columnWidth":672,
+				"rowHeightMode":"custom","rowHeight":300,"items":[%s]
+			}}
+		}
+	}`, strings.Join(elements, ","), strings.Join(items, ","))
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Len(t, dashboard.Panels, 4)
+	want := []grafana.GridPos{
+		{H: 8, W: 12, X: 0, Y: 0},
+		{H: 8, W: 12, X: 12, Y: 0},
+		{H: 8, W: 12, X: 0, Y: 8},
+		{H: 8, W: 12, X: 12, Y: 8},
 	}
 	for index, panel := range dashboard.Panels {
 		assert.Equal(t, want[index], panel.GridPos)

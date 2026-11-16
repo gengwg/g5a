@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const defaultScrapeIntervalMs = 15000
+const (
+	defaultScrapeIntervalMs  = 15000
+	datasourceTypePrometheus = "prometheus"
+)
 
 // Client is an HTTP client for the Grafana API.
 type Client struct {

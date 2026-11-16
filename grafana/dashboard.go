@@ -220,6 +220,11 @@ type TemplateVariable struct {
 	Sort       int                      `json:"sort,omitempty"`
 	Refresh    int                      `json:"refresh,omitempty"`
 	Hide       int                      `json:"hide,omitempty"`
+	Auto       bool                     `json:"auto,omitempty"`
+	//nolint:tagliatelle // Grafana's interval variable schema uses snake_case.
+	AutoMin string `json:"auto_min,omitempty"`
+	//nolint:tagliatelle // Grafana's interval variable schema uses snake_case.
+	AutoCount int `json:"auto_count,omitempty"`
 }
 
 // TemplateVariableOption represents a selectable option for a

@@ -67,8 +67,10 @@ type dashboardV2Element struct {
 			Spec struct {
 				Queries         []dashboardV2Query `json:"queries"`
 				Transformations []struct {
+					Kind  string `json:"kind"`
 					Group string `json:"group"`
 					Spec  struct {
+						ID       string          `json:"id"`
 						Disabled bool            `json:"disabled"`
 						Options  json.RawMessage `json:"options"`
 					} `json:"spec"`
@@ -98,12 +100,14 @@ type dashboardV2Layout struct {
 }
 
 type dashboardV2LayoutSpec struct {
-	Items          []dashboardV2LayoutItem `json:"items"`
-	Rows           []dashboardV2LayoutRow  `json:"rows"`
-	Tabs           []dashboardV2LayoutTab  `json:"tabs"`
-	MaxColumnCount int                     `json:"maxColumnCount"`
-	RowHeight      int                     `json:"rowHeight"`
-	RowHeightMode  string                  `json:"rowHeightMode"`
+	Items           []dashboardV2LayoutItem `json:"items"`
+	Rows            []dashboardV2LayoutRow  `json:"rows"`
+	Tabs            []dashboardV2LayoutTab  `json:"tabs"`
+	MaxColumnCount  int                     `json:"maxColumnCount"`
+	ColumnWidth     int                     `json:"columnWidth"`
+	ColumnWidthMode string                  `json:"columnWidthMode"`
+	RowHeight       int                     `json:"rowHeight"`
+	RowHeightMode   string                  `json:"rowHeightMode"`
 }
 
 type dashboardV2LayoutItem struct {
@@ -513,12 +517,38 @@ func (layout dashboardV2Layout) autoGridPanels(
 	return normalized.gridPanels(elements, 0, ids)
 }
 
+const (
+	autoGridReferenceWidth = 1360
+	autoGridGap            = 8
+	autoGridRowUnit        = 38
+	autoGridColumnNarrow   = "narrow"
+	autoGridColumnWide     = "wide"
+)
+
 func (layout dashboardV2Layout) autoGridColumns() int {
-	if layout.Spec.MaxColumnCount <= 0 {
-		return 3
+	maxColumns := layout.Spec.MaxColumnCount
+	if maxColumns <= 0 {
+		maxColumns = 3
+	}
+	width := layout.autoGridColumnWidth()
+	columns := max(1, (autoGridReferenceWidth+autoGridGap)/(width+autoGridGap))
+
+	return min(maxColumns, columns, dashboardV2GridColumns)
+}
+
+func (layout dashboardV2Layout) autoGridColumnWidth() int {
+	switch layout.Spec.ColumnWidthMode {
+	case autoGridColumnNarrow:
+		return 192
+	case autoGridColumnWide:
+		return 768
+	case variableTypeCustom:
+		if layout.Spec.ColumnWidth > 0 {
+			return layout.Spec.ColumnWidth
+		}
 	}
 
-	return min(layout.Spec.MaxColumnCount, dashboardV2GridColumns)
+	return 448
 }
 
 func (layout dashboardV2Layout) autoGridRowHeight() int {
@@ -529,7 +559,7 @@ func (layout dashboardV2Layout) autoGridRowHeight() int {
 		return 12
 	case variableTypeCustom:
 		if layout.Spec.RowHeight > 0 {
-			return layout.Spec.RowHeight
+			return max(1, (layout.Spec.RowHeight+autoGridGap+autoGridRowUnit/2)/autoGridRowUnit)
 		}
 		return 8
 	default:
@@ -650,6 +680,17 @@ func classicV2Target(query dashboardV2Query, index int) (Target, error) {
 	return Target{RefID: refID, Datasource: datasource, raw: raw}, nil
 }
 
+func v2TransformationID(kind, group, specID string) string {
+	if group != "" {
+		return group
+	}
+	if kind != "" {
+		return kind
+	}
+
+	return specID
+}
+
 func setV2PanelData(panel *Panel, element dashboardV2Element) error {
 	for index, query := range element.Spec.Data.Spec.Queries {
 		target, err := classicV2Target(query, index)
@@ -666,7 +707,8 @@ func setV2PanelData(panel *Panel, element dashboardV2Element) error {
 			continue
 		}
 		panel.Transformations = append(panel.Transformations, Transformation{
-			ID: transformation.Group, Options: transformation.Spec.Options,
+			ID:      v2TransformationID(transformation.Kind, transformation.Group, transformation.Spec.ID),
+			Options: transformation.Spec.Options,
 		})
 	}
 

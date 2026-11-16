@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	variableTypeCustom = "custom"
-	grafanaTimeNow     = "now"
+	variableTypeCustom       = "custom"
+	variableTypeInterval     = "interval"
+	grafanaTimeNow           = "now"
+	grafanaIntervalAutoToken = "$__auto"
 )
 
 var (
@@ -98,6 +100,7 @@ func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
 		if selected, ok := selections[variable.Name]; ok && selected != "" {
 			current = selected
 		}
+		current = normalizeIntervalAutoSelection(variable, current)
 
 		switch variable.Type {
 		case variableTypeCustom, "constant":
@@ -110,6 +113,8 @@ func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
 			}
 			opts = datasourceVariableOptions(variable, datasources)
 			current = resolveDatasourceSelection(current, datasources)
+		case variableTypeInterval:
+			opts = intervalVariableOptions(variable)
 		case "query":
 			if !shouldFetchQueryVariable(variable, initialLoad) {
 				opts = parseCustomVariableOptions(variable)
@@ -135,6 +140,33 @@ func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
 	}
 
 	return options, defaults, nil
+}
+
+func normalizeIntervalAutoSelection(variable TemplateVariable, selected string) string {
+	if variable.Type == variableTypeInterval && variable.Auto && isIntervalAutoSelection(variable, selected) {
+		return grafanaIntervalAutoToken
+	}
+
+	return selected
+}
+
+func isIntervalAutoSelection(variable TemplateVariable, selected string) bool {
+	return selected == grafanaIntervalAutoToken || selected == "$__auto_interval_"+variable.Name
+}
+
+func intervalVariableOptions(variable TemplateVariable) []string {
+	options := parseCustomVariableOptions(variable)
+	if !variable.Auto {
+		return options
+	}
+	result := make([]string, 0, len(options)+1)
+	for _, option := range options {
+		if !isIntervalAutoSelection(variable, option) {
+			result = append(result, option)
+		}
+	}
+
+	return append(result, grafanaIntervalAutoToken)
 }
 
 func parseCustomVariableOptions(v TemplateVariable) []string {
@@ -244,14 +276,19 @@ func (c *Client) fetchQueryVariableOptions(
 	resolved map[string]string,
 	timeRange TimeRange,
 ) ([]string, error) {
-	query := ResolveVariables(queryDefinition(variable), variables, resolved)
-	if query == "" {
+	rawQuery := queryDefinition(variable)
+	if rawQuery == "" {
 		return []string{}, nil
 	}
 	if !validTimeExpression(timeRange.From) || !validTimeExpression(timeRange.To) {
 		return nil, fmt.Errorf("%w: %s to %s", errUnsupportedTimeRange, timeRange.From, timeRange.To)
 	}
 	fromMs, toMs := resolveTimeRange(timeRange)
+	resolved = resolveIntervalAutoOverrides(variables, resolved, toMs-fromMs)
+	query := ResolveVariables(rawQuery, variables, resolved)
+	if query == "" {
+		return []string{}, nil
+	}
 
 	datasourceUID := ""
 	datasourceType := ""

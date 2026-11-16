@@ -260,7 +260,7 @@ func supportedAlertRuleDatasource(datasource alertRuleDatasource) bool {
 	}
 
 	switch datasource.Type {
-	case "prometheus", "loki",
+	case datasourceTypePrometheus, "loki",
 		"grafana-amazonprometheus-datasource", "grafana-azureprometheus-datasource":
 		return true
 	default:

@@ -37,7 +37,7 @@ func TestBuildDSQueryTargetHonorsMinStepAndExplicitFields(t *testing.T) {
 
 	target := Target{
 		RefID:      "A",
-		Datasource: &DatasourceRef{UID: "prom1", Type: "prometheus"},
+		Datasource: &DatasourceRef{UID: "prom1", Type: datasourceTypePrometheus},
 		raw:        json.RawMessage(`{"expr":"rate(x[$__rate_interval])","interval":"5m","maxDataPoints":42}`),
 	}
 	raw, err := buildDSQueryTarget(
@@ -78,6 +78,63 @@ func TestResolveBuiltinVariablesRateIntervalUsesDatasourceScrapeInterval(t *test
 
 	if got := resolveBuiltinVariables("$__rate_interval", 15000, 60000, 0, 0, 0); got != "4m" {
 		t.Errorf("rate interval = %q, want 4m", got)
+	}
+}
+
+func TestBuildDSQueryTargetHonorsIntervalAuto(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		variable string
+		override string
+		rangeMs  int64
+		wantExpr string
+	}{
+		{
+			name: "minimum applies",
+			variable: `{"name":"summarize","type":"interval","auto":true,` +
+				`"auto_min":"2m","auto_count":30,"current":{"value":"$__auto"}}`,
+			override: "", rangeMs: 1800000, wantExpr: "rate(x[2m])",
+		},
+		{
+			name: "count and legacy override apply",
+			variable: `{"name":"summarize","type":"interval","auto":true,` +
+				`"auto_min":"10s","auto_count":6,"current":{"value":"$__auto"}}`,
+			override: "$__auto_interval_summarize", rangeMs: 3600000, wantExpr: "rate(x[10m])",
+		},
+		{
+			name: "fixed selection remains fixed",
+			variable: `{"name":"summarize","type":"interval","auto":true,` +
+				`"auto_min":"2m","auto_count":30,"current":{"value":"$__auto"}}`,
+			override: "30s", rangeMs: 1800000, wantExpr: "rate(x[30s])",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var variable TemplateVariable
+			require.NoError(t, json.Unmarshal([]byte(test.variable), &variable))
+			overrides := make(map[string]string)
+			if test.override != "" {
+				overrides["summarize"] = test.override
+			}
+			target := Target{
+				RefID: "A", Datasource: &DatasourceRef{UID: "prom1", Type: datasourceTypePrometheus},
+				raw: json.RawMessage(`{"expr":"rate(x[$summarize])"}`),
+			}
+			raw, err := buildDSQueryTarget(
+				target, target.Datasource, []TemplateVariable{variable}, overrides,
+				1000, 15000, 0, test.rangeMs, test.rangeMs, 100, "timeseries",
+			)
+			require.NoError(t, err)
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(raw, &got))
+			assert.Equal(t, test.wantExpr, got["expr"])
+			if test.override != "" {
+				assert.Equal(t, test.override, overrides["summarize"])
+			}
+		})
 	}
 }
 

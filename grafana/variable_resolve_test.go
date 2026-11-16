@@ -253,6 +253,100 @@ func TestResolveVariableOptions_LabelValuesQueries(t *testing.T) {
 	}
 }
 
+func TestResolveVariableOptionsIntervalAuto(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		current     string
+		auto        bool
+		wantDefault string
+		wantOptions []string
+	}{
+		{
+			name: "canonical Auto", current: "$__auto", auto: true,
+			wantDefault: "$__auto", wantOptions: []string{"1m", "10m", "$__auto"},
+		},
+		{
+			name: "legacy Auto", current: "$__auto_interval_summarize", auto: true,
+			wantDefault: "$__auto", wantOptions: []string{"1m", "10m", "$__auto"},
+		},
+		{
+			name: "fixed default", current: "", auto: true,
+			wantDefault: "1m", wantOptions: []string{"1m", "10m", "$__auto"},
+		},
+		{
+			name: "Auto disabled", current: "1m", auto: false,
+			wantDefault: "1m", wantOptions: []string{"1m", "10m"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			client, err := grafana.NewClient("http://grafana.invalid")
+			require.NoError(t, err)
+			variable := grafana.TemplateVariable{
+				Name: "summarize", Type: "interval", Query: json.RawMessage(`"1m,10m"`),
+				Auto: test.auto, AutoMin: "2m", AutoCount: 30,
+				Current: grafana.TemplateVariableCurrent{Value: json.RawMessage(strconv.Quote(test.current))},
+			}
+			options, defaults, err := client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+				t.Context(), []grafana.TemplateVariable{variable},
+				grafana.TimeRange{From: "0", To: "1800000"}, nil, true,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, test.wantOptions, options["summarize"])
+			assert.Equal(t, test.wantDefault, defaults["summarize"])
+		})
+	}
+}
+
+func TestDependentQueryVariableUsesIntervalAuto(t *testing.T) {
+	t.Parallel()
+
+	var expression string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/datasources":
+			_, _ = w.Write([]byte(`[{"uid":"prom1","name":"Prometheus","type":"prometheus"}]`))
+		case "/api/ds/query":
+			var request struct {
+				Queries []struct {
+					Expr string `json:"expr"`
+				} `json:"queries"`
+			}
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			assert.Len(t, request.Queries, 1)
+			if len(request.Queries) > 0 {
+				expression = request.Queries[0].Expr
+			}
+			_, _ = w.Write([]byte(`{"results":{"vars":{"frames":[]}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	variables := []grafana.TemplateVariable{
+		{
+			Name: "summarize", Type: "interval", Query: json.RawMessage(`"1m,10m"`),
+			Auto: true, AutoMin: "2m", AutoCount: 30,
+			Current: grafana.TemplateVariableCurrent{Value: json.RawMessage(`"$__auto"`)},
+		},
+		{
+			Name: "instance", Type: "query", Refresh: 1,
+			Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+			Query:      json.RawMessage(`"query_result(rate(up[$summarize]))"`),
+		},
+	}
+	_, _, err = client.ResolveVariableOptionsWithTimeRange(
+		t.Context(), variables, grafana.TimeRange{From: "0", To: "1800000"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "rate(up[2m])", expression)
+}
+
 func TestResolveVariableOptionsRespectRefreshMode(t *testing.T) {
 	t.Parallel()
 
