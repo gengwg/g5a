@@ -26,11 +26,7 @@ func TestDashboardNamespace(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			client := &Client{orgID: test.orgID, baseURL: &url.URL{Scheme: "https", Host: test.host}}
-			got, err := client.dashboardNamespace(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != test.want {
+			if got := client.organizationNamespace(); got != test.want {
 				t.Errorf("namespace = %q, want %q", got, test.want)
 			}
 		})
