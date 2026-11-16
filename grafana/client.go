@@ -21,6 +21,7 @@ type Client struct {
 	token      string
 	username   string
 	password   string
+	orgID      string
 	httpClient *http.Client
 
 	// dsCache maps datasource name → UID, lazily populated.
@@ -46,6 +47,11 @@ func WithBasicAuth(username, password string) ClientOption {
 	}
 }
 
+// WithOrgID selects the Grafana organization for API requests.
+func WithOrgID(orgID string) ClientOption {
+	return func(c *Client) { c.orgID = orgID }
+}
+
 // WithHTTPClient sets a custom HTTP client.
 func WithHTTPClient(httpClient *http.Client) ClientOption {
 	return func(c *Client) { c.httpClient = httpClient }
@@ -63,6 +69,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		token:       "",
 		username:    "",
 		password:    "",
+		orgID:       "",
 		httpClient:  &http.Client{Timeout: 60 * time.Second}, //nolint:exhaustruct // default transport settings
 		dsCache:     nil,
 		dsTypeCache: nil,
@@ -219,6 +226,9 @@ func (c *Client) setAuthHeader(request *http.Request) {
 		request.Header.Set("Authorization", "Bearer "+c.token)
 	case c.username != "":
 		request.SetBasicAuth(c.username, c.password)
+	}
+	if c.orgID != "" {
+		request.Header.Set("X-Grafana-Org-Id", c.orgID)
 	}
 }
 

@@ -55,11 +55,12 @@ type dashboardView struct {
 	loading   map[string]bool
 	bodyCache map[string]panelBodyCache
 
-	variableValues  map[string]string
-	variableOptions map[string][]string
-	timeRange       grafana.TimeRange
-	refresh         time.Duration
-	refreshSet      bool
+	variableValues    map[string]string
+	variableOptions   map[string][]string
+	timeRange         grafana.TimeRange
+	preserveTimeRange bool
+	refresh           time.Duration
+	refreshSet        bool
 
 	selected int
 	scroll   int
@@ -132,7 +133,7 @@ func (d *dashboardView) handleDashboardLoaded(
 ) (view, tea.Cmd) {
 	d.dashboard = msg.dashboard
 	d.err = nil
-	if d.dashboard.Time.From != "" && d.dashboard.Time.To != "" {
+	if !d.preserveTimeRange && d.dashboard.Time.From != "" && d.dashboard.Time.To != "" {
 		d.timeRange = grafana.TimeRange{
 			From: d.dashboard.Time.From,
 			To:   d.dashboard.Time.To,

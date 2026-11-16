@@ -52,6 +52,32 @@ func TestClient_BearerTokenAuth(t *testing.T) {
 	}
 }
 
+func TestClient_OrgIDHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotOrgID string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotOrgID = r.Header.Get("X-Grafana-Org-Id")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+		},
+	))
+	defer server.Close()
+
+	client, err := grafana.NewClient(server.URL,
+		grafana.WithOrgID("2"),
+		grafana.WithHTTPClient(server.Client()),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, _ = client.SearchDashboards(t.Context(), "")
+	if gotOrgID != "2" {
+		t.Errorf("org header = %q, want 2", gotOrgID)
+	}
+}
+
 func TestClient_BasicAuth(t *testing.T) {
 	t.Parallel()
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -94,10 +95,13 @@ func run(f flags) error {
 		return errURLRequired
 	}
 
-	baseURL, dashUID, panelID := parseGrafanaURL(f.url)
-	f.url = baseURL
+	parts := parseGrafanaURL(f.url)
+	f.url = parts.baseURL
 
 	clientOpts := resolveAuth(f)
+	if parts.orgID != "" {
+		clientOpts = append(clientOpts, grafana.WithOrgID(parts.orgID))
+	}
 
 	client, err := grafana.NewClient(f.url, clientOpts...)
 	if err != nil {
@@ -110,11 +114,13 @@ func run(f flags) error {
 	}
 
 	app := grafanatui.NewApp(client, grafanatui.Options{
-		TimeRange:      grafana.TimeRange{From: "now-1h", To: "now"},
-		Refresh:        f.refresh,
-		RefreshSet:     f.refreshSet,
-		DashboardUID:   dashUID,
-		InitialPanelID: panelID,
+		TimeRange:        parts.timeRange,
+		TimeRangeSet:     parts.timeRangeSet,
+		Refresh:          f.refresh,
+		RefreshSet:       f.refreshSet,
+		DashboardUID:     parts.dashUID,
+		InitialPanelID:   parts.panelID,
+		InitialVariables: parts.variables,
 	})
 
 	program := tea.NewProgram(app, tea.WithAltScreen())
@@ -161,40 +167,68 @@ func resolveEnv(flagValue, envKey string) string {
 	return os.Getenv(envKey)
 }
 
-// dashboardPathPattern matches /d/{uid} or /d/{uid}/{slug} in a
-// Grafana URL path.
-var dashboardPathPattern = regexp.MustCompile(
-	`/d/([^/?]+)`,
-)
+const timeNow = "now"
 
-// parseGrafanaURL extracts the base URL, dashboard UID, and panel ID
-// from a Grafana URL like https://host/d/abc123/slug?viewPanel=22.
-// If the URL doesn't contain a dashboard path, the original URL is
-// returned with empty UID and zero panel ID.
-func parseGrafanaURL(rawURL string) (baseURL, dashUID string, panelID int) {
+// dashboardPathPattern matches /d/{uid} or /d-solo/{uid} with an optional slug.
+var dashboardPathPattern = regexp.MustCompile(`/(?:d|d-solo)/([^/?]+)`)
+
+type grafanaURLParts struct {
+	baseURL      string
+	dashUID      string
+	panelID      int
+	timeRange    grafana.TimeRange
+	timeRangeSet bool
+	variables    map[string]string
+	orgID        string
+}
+
+// parseGrafanaURL extracts connection, dashboard, and initial view options.
+func parseGrafanaURL(rawURL string) grafanaURLParts {
+	parts := grafanaURLParts{
+		baseURL: "", dashUID: "", panelID: 0, orgID: "", timeRangeSet: false,
+		timeRange: grafana.TimeRange{From: "now-1h", To: timeNow},
+		variables: map[string]string{},
+	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return rawURL, "", 0
-	}
+		parts.baseURL = rawURL
 
+		return parts
+	}
 	matches := dashboardPathPattern.FindStringSubmatch(parsed.Path)
 	if matches == nil {
-		return rawURL, "", 0
+		parts.baseURL = rawURL
+
+		return parts
 	}
-
-	dashUID = matches[1]
-
+	parts.dashUID = matches[1]
 	if viewPanel := parsed.Query().Get("viewPanel"); viewPanel != "" {
-		panelID, _ = strconv.Atoi(viewPanel)
+		parts.panelID, _ = strconv.Atoi(viewPanel)
 	}
-
-	// Strip the /d/... path to get the base URL.
+	query := parsed.Query()
+	if from := query.Get("from"); from != "" {
+		parts.timeRange.From = from
+		parts.timeRangeSet = true
+	}
+	if to := query.Get("to"); to != "" {
+		parts.timeRange.To = to
+		parts.timeRangeSet = true
+	}
+	parts.orgID = query.Get("orgId")
+	for name, values := range query {
+		if strings.HasPrefix(name, "var-") && len(values) > 0 {
+			variable := strings.TrimPrefix(name, "var-")
+			if variable != "" {
+				parts.variables[variable] = strings.Join(values, ",")
+			}
+		}
+	}
 	parsed.Path = parsed.Path[:dashboardPathPattern.FindStringIndex(parsed.Path)[0]]
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
-	baseURL = parsed.String()
+	parts.baseURL = parsed.String()
 
-	return baseURL, dashUID, panelID
+	return parts
 }
 
 // initStderr redirects stderr to a log file so that log output does not

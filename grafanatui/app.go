@@ -35,24 +35,27 @@ type view interface {
 
 // Options configures the App at creation time.
 type Options struct {
-	TimeRange      grafana.TimeRange
-	Refresh        time.Duration
-	RefreshSet     bool
-	DashboardUID   string // if set, open this dashboard directly
-	InitialPanelID int    // if set, jump to this panel
+	TimeRange        grafana.TimeRange
+	TimeRangeSet     bool
+	Refresh          time.Duration
+	RefreshSet       bool
+	DashboardUID     string // if set, open this dashboard directly
+	InitialPanelID   int    // if set, jump to this panel
+	InitialVariables map[string]string
 }
 
 // App is the root Bubble Tea model that manages a view stack.
 type App struct {
-	client     *grafana.Client
-	views      []view
-	width      int
-	height     int
-	timeRange  grafana.TimeRange
-	refresh    time.Duration
-	refreshSet bool
-	err        error
-	showHelp   bool
+	client       *grafana.Client
+	views        []view
+	width        int
+	height       int
+	timeRange    grafana.TimeRange
+	timeRangeSet bool
+	refresh      time.Duration
+	refreshSet   bool
+	err          error
+	showHelp     bool
 }
 
 // Navigation and lifecycle messages.
@@ -81,23 +84,28 @@ type (
 // initial view.
 func NewApp(client *grafana.Client, opts Options) *App {
 	app := &App{
-		client:     client,
-		views:      nil,
-		width:      80, //nolint:mnd // sensible default
-		height:     24, //nolint:mnd // sensible default
-		timeRange:  opts.TimeRange,
-		refresh:    opts.Refresh,
-		refreshSet: opts.RefreshSet,
-		err:        nil,
-		showHelp:   false,
+		client:       client,
+		views:        nil,
+		width:        80, //nolint:mnd // sensible default
+		height:       24, //nolint:mnd // sensible default
+		timeRange:    opts.TimeRange,
+		timeRangeSet: opts.TimeRangeSet,
+		refresh:      opts.Refresh,
+		refreshSet:   opts.RefreshSet,
+		err:          nil,
+		showHelp:     false,
 	}
 
 	if opts.DashboardUID != "" {
 		dashboard := newDashboardView(client, opts.DashboardUID)
+		dashboard.variableValues = opts.InitialVariables
 		app.configureDashboardView(dashboard)
 		app.views = []view{newDashboardListView(client), dashboard}
 		if opts.InitialPanelID > 0 {
 			panel := newPanelView(client, opts.DashboardUID)
+			panel.variableValues = opts.InitialVariables
+			panel.timeRange = opts.TimeRange
+			panel.preserveTimeRange = opts.TimeRangeSet
 			panel.initialPanelID = opts.InitialPanelID
 			app.views = append(app.views, panel)
 		}
@@ -109,6 +117,10 @@ func NewApp(client *grafana.Client, opts Options) *App {
 }
 
 func (a *App) configureDashboardView(dashboard *dashboardView) {
+	if a.timeRangeSet {
+		dashboard.timeRange = a.timeRange
+		dashboard.preserveTimeRange = true
+	}
 	if a.refreshSet {
 		dashboard.refresh = a.refresh
 		dashboard.refreshSet = true
