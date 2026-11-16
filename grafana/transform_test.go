@@ -159,7 +159,7 @@ func TestApplyTransformationsJoinByField(t *testing.T) {
 func TestApplyTransformationsJoinByFieldUnsupportedModeWarns(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []string{"inner", "outerTabular"} {
+	for _, mode := range []string{"left"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
@@ -175,6 +175,147 @@ func TestApplyTransformationsJoinByFieldUnsupportedModeWarns(t *testing.T) {
 			assert.JSONEq(t, `["a"]`, string(result.Results["A"].Frames[0].Data.Values[0]))
 		})
 	}
+}
+
+func TestApplyTransformationsTabularJoins(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mode        string
+		wantColumns []string
+	}{
+		{
+			mode: "inner",
+			wantColumns: []string{
+				`["A","A","B","B"]`, `[1,2,3,3]`, `[10,10,20,30]`, `[100,100,200,200]`,
+			},
+		},
+		{
+			mode: "outerTabular",
+			wantColumns: []string{
+				`["A","A","B","B","C","D","E"]`,
+				`[1,2,3,3,4,null,null]`,
+				`[10,10,20,30,null,40,null]`,
+				`[100,100,200,200,null,null,300]`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.mode, func(t *testing.T) {
+			t.Parallel()
+			result := &grafana.QueryResult{Results: tabularJoinResults()}
+			grafana.ApplyTransformations(result, []grafana.Transformation{{
+				ID: "joinByField", Options: json.RawMessage(`{"byField":"Key","mode":"` + test.mode + `"}`),
+			}})
+			frame := result.Results["A"].Frames[0]
+			require.Len(t, frame.Data.Values, len(test.wantColumns))
+			for index, want := range test.wantColumns {
+				assert.JSONEq(t, want, string(frame.Data.Values[index]))
+			}
+		})
+	}
+}
+
+func TestApplyTransformationsTabularJoinNullAndMissingKeys(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		mode        string
+		wantKeys    string
+		wantColumns []string
+	}{
+		{mode: "inner", wantKeys: `[]`, wantColumns: []string{`[]`, `[]`}},
+		{mode: "outerTabular", wantKeys: `[null,null]`, wantColumns: []string{`[1,null]`, `[null,2]`}},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			t.Parallel()
+			result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+				"A": {Frames: []grafana.DataFrame{tabularJoinFrame("A", "Left", `[null]`, `[1]`)}},
+				"B": {Frames: []grafana.DataFrame{tabularJoinFrame("B", "Right", `[null]`, `[2]`)}},
+			}}
+			grafana.ApplyTransformations(result, []grafana.Transformation{{
+				ID: "joinByField", Options: json.RawMessage(`{"byField":"Key","mode":"` + test.mode + `"}`),
+			}})
+			frame := result.Results["A"].Frames[0]
+			assert.JSONEq(t, test.wantKeys, string(frame.Data.Values[0]))
+			for index, want := range test.wantColumns {
+				assert.JSONEq(t, want, string(frame.Data.Values[index+1]))
+			}
+		})
+	}
+}
+
+func TestApplyTransformationsInnerJoinMissingFieldReturnsNoRows(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{tabularJoinFrame("A", "Value", `["a"]`, `[1]`)}},
+		"B": {Frames: []grafana.DataFrame{newTransformFrame("B", transformFields("Other"), `["b"]`)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "joinByField", Options: json.RawMessage(`{"byField":"Key","mode":"inner"}`),
+	}})
+	assert.JSONEq(t, `[]`, string(result.Results["A"].Frames[0].Data.Values[0]))
+}
+
+func TestApplyTransformationsInnerJoinDuplicateKeysAndNames(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{tabularJoinFrame("A", "Value", `["a","a"]`, `[1,2]`)}},
+		"B": {Frames: []grafana.DataFrame{tabularJoinFrame("B", "Value", `["a","a"]`, `[10,20]`)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "joinByField", Options: json.RawMessage(`{"byField":"Key","mode":"inner"}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	assert.Equal(t, "Value #A", frame.Schema.Fields[1].Name)
+	assert.Equal(t, "Value #B", frame.Schema.Fields[2].Name)
+	assert.JSONEq(t, `["a","a","a","a"]`, string(frame.Data.Values[0]))
+	assert.JSONEq(t, `[1,1,2,2]`, string(frame.Data.Values[1]))
+	assert.JSONEq(t, `[10,20,10,20]`, string(frame.Data.Values[2]))
+}
+
+func TestApplyTransformationsInnerJoinOnPrometheusLabel(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A", []grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"node": "alpha"}},
+			}, `[1000]`, `[1]`,
+		)}},
+		"B": {Frames: []grafana.DataFrame{newTransformFrame(
+			"B", []grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{"node": "alpha"}},
+			}, `[1000]`, `[2]`,
+		)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "joinByField", Options: json.RawMessage(`{"byField":"node","mode":"inner"}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	assert.JSONEq(t, `["alpha"]`, string(frame.Data.Values[0]))
+	assert.Equal(t, "Value #A", frame.Schema.Fields[2].Name)
+	assert.Equal(t, "Value #B", frame.Schema.Fields[4].Name)
+}
+
+func tabularJoinResults() map[string]grafana.QueryResultData {
+	return map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{tabularJoinFrame("A", "L", `["A","A","B","C"]`, `[1,2,3,4]`)}},
+		"B": {Frames: []grafana.DataFrame{tabularJoinFrame("B", "M", `["A","B","B","D"]`, `[10,20,30,40]`)}},
+		"C": {Frames: []grafana.DataFrame{tabularJoinFrame("C", "R", `["A","B","E"]`, `[100,200,300]`)}},
+	}
+}
+
+func tabularJoinFrame(refID, valueName, keys, values string) grafana.DataFrame {
+	return newTransformFrame(
+		refID,
+		[]grafana.DataFrameField{{Name: "Key", Type: "string"}, {Name: valueName, Type: "number"}},
+		keys, values,
+	)
 }
 
 func TestApplyTransformationsReduceSeriesToRowsUsesAllReducers(t *testing.T) {

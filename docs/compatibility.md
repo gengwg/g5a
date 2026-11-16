@@ -64,7 +64,7 @@ Text panels remain visible in navigation. Alert-list acknowledgement and other a
 
 ## Transformations
 
-- `joinByField` with outer joins across frames and refIDs, including joins on Prometheus labels. `inner` and `outerTabular` currently leave frames unjoined and produce a visible warning.
+- `joinByField` with `outer`, `inner`, and `outerTabular` joins across frames and refIDs, including joins on Prometheus labels. Tabular modes preserve duplicate-key cartesian matches; `outerTabular` retains unmatched rows and null keys.
 - `organize` preserves label fields in their original relative order before numeric values. Other transformations expand labels only when needed by `joinByField`, `groupingToMatrix`, or exact-name/literal-alternative field filters; unrelated labels remain attached to their fields instead of becoming sparse table columns.
 - `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and all `emptyValue` settings (`null`, `true`, `false`, `zero`, and `empty`; the default is an empty string).
 - `sortBy` with ordered field rules and numeric-aware stable sorting.

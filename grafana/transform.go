@@ -13,6 +13,8 @@ import (
 
 const (
 	joinModeOuter                  = "outer"
+	joinModeInner                  = "inner"
+	joinModeOuterTabular           = "outerTabular"
 	transformationOrganize         = "organize"
 	transformationJoinByField      = "joinByField"
 	transformationFilterByValue    = "filterByValue"
@@ -91,6 +93,7 @@ type dataFrameJoin struct {
 	keyFieldSet  bool
 }
 
+//nolint:cyclop // join option validation and result/frame traversal stay together
 func applyJoinByField(result *QueryResult, raw json.RawMessage) {
 	var opts joinByFieldOptions
 	if err := json.Unmarshal(raw, &opts); err != nil {
@@ -102,7 +105,9 @@ func applyJoinByField(result *QueryResult, raw json.RawMessage) {
 		return
 	}
 
-	if opts.Mode != "" && opts.Mode != joinModeOuter {
+	switch opts.Mode {
+	case "", joinModeOuter, joinModeInner, joinModeOuterTabular:
+	default:
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("joinByField mode %q is unsupported; frames left unjoined", opts.Mode))
 		slog.Debug("unsupported joinByField mode, skipping", "mode", opts.Mode)
@@ -119,6 +124,10 @@ func applyJoinByField(result *QueryResult, raw json.RawMessage) {
 	}
 
 	slices.Sort(refIDs)
+	if opts.Mode == joinModeInner || opts.Mode == joinModeOuterTabular {
+		applyTabularJoin(result, opts.ByField, opts.Mode, refIDs)
+		return
+	}
 
 	join := newDataFrameJoin(opts.ByField, refIDs[0])
 
@@ -158,50 +167,12 @@ func newDataFrameJoin(byField, refID string) *dataFrameJoin {
 }
 
 func (j *dataFrameJoin) addFrame(frame *DataFrame, resultRefID string) {
-	inputColumns := parseAllColumns(frame)
-	keyIdx := findFieldIndex(frame, j.byField)
-	if keyIdx >= 0 && keyIdx < len(inputColumns) {
+	for _, input := range joinFrameInputs(frame, j.byField, resultRefID) {
 		j.addFrameWithKeys(
-			frame,
-			inputColumns,
-			frame.Schema.Fields[keyIdx],
-			inputColumns[keyIdx],
-			resultRefID,
-		)
-		return
-	}
-
-	// A wide frame can hold several series with different values for the
-	// same join label. Split those series before joining so each field keeps
-	// its own label/value association.
-	for fieldIdx, field := range frame.Schema.Fields {
-		labelValue, exists := field.Labels[j.byField]
-		if !exists || fieldIdx >= len(inputColumns) {
-			continue
-		}
-		narrowFields := make([]DataFrameField, 0, 2)
-		narrowColumns := make([][]any, 0, 2)
-		for index, candidate := range frame.Schema.Fields {
-			if candidate.Type == fieldTypeTime && index < len(inputColumns) {
-				narrowFields = append(narrowFields, candidate)
-				narrowColumns = append(narrowColumns, inputColumns[index])
-			}
-		}
-		narrowFields = append(narrowFields, field)
-		narrowColumns = append(narrowColumns, inputColumns[fieldIdx])
-		narrowFrame := &DataFrame{
-			Schema: DataFrameSchema{RefID: frame.Schema.RefID, Meta: frame.Schema.Meta, Fields: narrowFields},
-			Data:   DataFrameData{Values: rawColumns(narrowColumns)},
-		}
-		keyValues := make([]any, len(inputColumns[fieldIdx]))
-		for index := range keyValues {
-			keyValues[index] = labelValue
-		}
-		j.addFrameWithKeys(
-			narrowFrame,
-			narrowColumns,
-			DataFrameField{Name: j.byField, Type: fieldTypeString, Labels: nil, Config: nil},
-			keyValues,
+			input.frame,
+			input.columns,
+			input.keyField,
+			input.keyValues,
 			resultRefID,
 		)
 	}
@@ -285,6 +256,10 @@ func (j *dataFrameJoin) addRow(
 }
 
 func (j *dataFrameJoin) dataFrame() DataFrame {
+	return j.dataFrameWithCoalesce(true)
+}
+
+func (j *dataFrameJoin) dataFrameWithCoalesce(coalesce bool) DataFrame {
 	nameCounts := make(map[string]int, len(j.frame.Schema.Fields))
 	for _, field := range j.frame.Schema.Fields[1:] {
 		nameCounts[field.Name]++
@@ -301,7 +276,9 @@ func (j *dataFrameJoin) dataFrame() DataFrame {
 	for i, column := range j.columns {
 		j.frame.Data.Values[i] = mustMarshal(column)
 	}
-	j.coalesceDuplicateFields()
+	if coalesce {
+		j.coalesceDuplicateFields()
+	}
 	j.renameDuplicateTimeFields()
 
 	return j.frame

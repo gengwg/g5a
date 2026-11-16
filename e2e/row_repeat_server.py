@@ -388,12 +388,28 @@ TRANSFORM_DASHBOARD = {
             "gridPos": {"x": 12, "y": 0, "w": 12, "h": 6},
         },
         {
-            "id": 55, "type": "stat", "title": "Unsupported join",
+            "id": 55, "type": "table", "title": "Inner join",
             "datasource": {"uid": "prom1", "type": "prometheus"},
-            "targets": [{"refId": "K", "expr": "join", "instant": True, "range": False,
-                         "datasource": {"uid": "prom1", "type": "prometheus"}}],
-            "transformations": [{"id": "joinByField", "options": {"byField": "Time", "mode": "inner"}}],
-            "gridPos": {"x": 0, "y": 6, "w": 24, "h": 4},
+            "targets": [
+                {"refId": "A", "expr": "joinLeft", "instant": True, "range": False,
+                 "datasource": {"uid": "prom1", "type": "prometheus"}},
+                {"refId": "B", "expr": "joinRight", "instant": True, "range": False,
+                 "datasource": {"uid": "prom1", "type": "prometheus"}},
+            ],
+            "transformations": [{"id": "joinByField", "options": {"byField": "Key", "mode": "inner"}}],
+            "gridPos": {"x": 0, "y": 6, "w": 24, "h": 5},
+        },
+        {
+            "id": 56, "type": "table", "title": "Outer tabular",
+            "datasource": {"uid": "prom1", "type": "prometheus"},
+            "targets": [
+                {"refId": "A", "expr": "joinLeft", "instant": True, "range": False,
+                 "datasource": {"uid": "prom1", "type": "prometheus"}},
+                {"refId": "B", "expr": "joinRight", "instant": True, "range": False,
+                 "datasource": {"uid": "prom1", "type": "prometheus"}},
+            ],
+            "transformations": [{"id": "joinByField", "options": {"byField": "Key", "mode": "outerTabular"}}],
+            "gridPos": {"x": 0, "y": 11, "w": 24, "h": 5},
         },
     ],
 }
@@ -468,6 +484,19 @@ class Handler(BaseHTTPRequestHandler):
                 results["vars"] = {"frames": [query_result_frame()]}
                 continue
             cluster = query.get("expr", "")
+            if cluster in ("joinLeft", "joinRight"):
+                left = cluster == "joinLeft"
+                results[query["refId"]] = {"frames": [{
+                    "schema": {"refId": query["refId"], "fields": [
+                        {"name": "Key", "type": "string"},
+                        {"name": "Left" if left else "Right", "type": "number"},
+                    ]},
+                    "data": {"values": [
+                        ["shared", "leftOnly"] if left else ["shared", "rightOnly"],
+                        [1, 2] if left else [10, 20],
+                    ]},
+                }]}
+                continue
             if cluster == "reduce":
                 results[query["refId"]] = {"frames": [{
                     "schema": {"refId": query["refId"], "fields": [
