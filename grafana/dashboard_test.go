@@ -1,11 +1,16 @@
 package grafana_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/gengwg/g5a/grafana"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSearchDashboards(t *testing.T) {
@@ -48,6 +53,40 @@ func TestSearchDashboards(t *testing.T) {
 	}
 
 	assertSearchResult(t, results[0])
+}
+
+func TestSearchDashboardsPaginates(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		assert.Equal(t, "1000", r.URL.Query().Get("limit"))
+		page, err := strconv.Atoi(r.URL.Query().Get("page"))
+		assert.NoError(t, err)
+		count := 1
+		if page == 1 {
+			count = 1000
+		}
+		results := make([]map[string]string, count)
+		for index := range results {
+			results[index] = map[string]string{
+				"uid": fmt.Sprintf("page-%d-result-%d", page, index), "title": "Dashboard",
+			}
+		}
+		assert.NoError(t, json.NewEncoder(w).Encode(results))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	results, err := client.SearchDashboards(t.Context(), "")
+	require.NoError(t, err)
+	if len(results) != 1001 || requests != 2 {
+		t.Fatalf("got %d results from %d pages, want 1001 from 2", len(results), requests)
+	}
+	if results[1000].UID != "page-2-result-0" {
+		t.Errorf("last UID = %q", results[1000].UID)
+	}
 }
 
 func TestGetDashboard(t *testing.T) {

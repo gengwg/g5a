@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 )
 
 // DashboardSearchResult represents a dashboard in search results.
@@ -248,20 +249,25 @@ func (c *Client) SearchDashboards(
 	query string,
 ) ([]DashboardSearchResult, error) {
 	params := url.Values{
-		"type": {"dash-db"},
+		"type":  {"dash-db"},
+		"limit": {"1000"},
 	}
 	if query != "" {
 		params.Set("query", query)
 	}
 
-	path := "/api/search?" + params.Encode()
-
-	var results []DashboardSearchResult
-	if err := c.doJSON(ctx, path, &results); err != nil {
-		return nil, fmt.Errorf("searching dashboards: %w", err)
+	results := make([]DashboardSearchResult, 0)
+	for page := 1; ; page++ {
+		params.Set("page", strconv.Itoa(page))
+		var pageResults []DashboardSearchResult
+		if err := c.doJSON(ctx, "/api/search?"+params.Encode(), &pageResults); err != nil {
+			return nil, fmt.Errorf("searching dashboards: %w", err)
+		}
+		results = append(results, pageResults...)
+		if len(pageResults) < 1000 {
+			return results, nil
+		}
 	}
-
-	return results, nil
 }
 
 // GetDashboard returns the full dashboard by UID.
