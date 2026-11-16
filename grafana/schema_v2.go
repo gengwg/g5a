@@ -172,12 +172,12 @@ func (c *Client) dashboardNamespace(ctx context.Context) (string, error) {
 	case err == nil && settings.Namespace != "" &&
 		(cloudHost || strings.HasPrefix(settings.Namespace, "stacks-")):
 		c.namespaceCache = settings.Namespace
+		c.namespaceResolved = true
 	case cloudHost:
 		return "", errEmptyCloudNamespace
 	default:
-		c.namespaceCache = c.organizationNamespace()
+		return c.organizationNamespace(), nil
 	}
-	c.namespaceResolved = true
 
 	return c.namespaceCache, nil
 }

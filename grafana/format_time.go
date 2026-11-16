@@ -3,6 +3,7 @@ package grafana
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,10 @@ func applyFormatTime(result *QueryResult, raw json.RawMessage, dashboardTimezone
 	if err := json.Unmarshal(raw, &opts); err != nil {
 		result.Warnings = append(result.Warnings, "invalid formatTime options")
 		return
+	}
+	if opts.TimeField != "" && opts.OutputFormat != nil && momentFormatHasUnsupportedTokens(*opts.OutputFormat) {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("formatTime output format %q contains unsupported Moment tokens", *opts.OutputFormat))
 	}
 	location := TimeRangeLocation(opts.Timezone)
 	if opts.Timezone == "" {
@@ -108,17 +113,66 @@ func formatMomentTime(value time.Time, format *string) string {
 	return output.String()
 }
 
+func momentFormatHasUnsupportedTokens(format string) bool {
+	for index := 0; index < len(format); {
+		if format[index] == '[' {
+			end := strings.IndexByte(format[index+1:], ']')
+			if end >= 0 {
+				index += end + 2
+				continue
+			}
+		}
+		token := nextMomentToken(format[index:])
+		if slices.Contains(unsupportedMomentTokens(), token) {
+			return true
+		}
+		if token != "" {
+			index += len(token)
+			continue
+		}
+		if format[index] >= 'A' && format[index] <= 'Z' ||
+			format[index] >= 'a' && format[index] <= 'z' {
+			return true
+		}
+		index++
+	}
+
+	return false
+}
+
+// unsupportedMomentTokens returns Moment's formatting tokens that g5a does
+// not implement. They remain literal and produce a warning instead of being
+// decomposed into supported tokens with a different meaning.
+func unsupportedMomentTokens() []string {
+	return []string{
+		"eHHmm", "Hmmss", "Hmm", "hmmss", "hmm", "Mo",
+		"DDDo", "DDDD", "DDD", "Do", "do", "d",
+		"wo", "ww", "w", "Wo", "WW", "W", "Qo", "Q",
+		"NNNNN", "NNNN", "NNN", "NN", "N",
+		"YYYYYY", "YYYYY", "yyyy", "yyy", "yy", "yo", "y",
+		"ggggg", "gggg", "ggg", "gg", "GGGGG", "GGGG", "GGG", "GG",
+		"e", "E", "kk", "k",
+		"SSSSSSSSS", "SSSSSSSS", "SSSSSSS", "SSSSSS", "SSSSS", "SSSS", "SS", "S",
+		"x", "X", "zz", "z",
+		"LTS", "LT", "LLLL", "LLL", "LL", "L", "llll", "lll", "ll", "l",
+	}
+}
+
 func nextMomentToken(value string) string {
-	for _, token := range []string{
-		"YYYY", "MMMM", "MMM", "SSS", "MM", "DD", "HH", "hh", "mm", "ss", "ZZ",
+	supported := []string{
+		"YYYY", "MMMM", "MMM", "SSS", "MM", "dddd", "ddd", "dd", "DD", "HH", "hh", "mm", "ss", "ZZ",
 		"YY", "M", "D", "H", "h", "m", "s", "A", "a", "Z",
-	} {
-		if strings.HasPrefix(value, token) {
-			return token
+	}
+	longest := ""
+	for _, tokens := range [][]string{unsupportedMomentTokens(), supported} {
+		for _, token := range tokens {
+			if len(token) > len(longest) && strings.HasPrefix(value, token) {
+				longest = token
+			}
 		}
 	}
 
-	return ""
+	return longest
 }
 
 //nolint:cyclop // token-to-value mapping is intentionally explicit
@@ -170,6 +224,7 @@ func momentTokenValue(value time.Time, token string) string {
 	}
 }
 
+//nolint:cyclop // date-token-to-value mapping is intentionally explicit
 func momentDateTokenValue(value time.Time, token string) (string, bool) {
 	switch token {
 	case "YYYY":
@@ -184,6 +239,12 @@ func momentDateTokenValue(value time.Time, token string) (string, bool) {
 		return fmt.Sprintf("%02d", int(value.Month())), true
 	case "M":
 		return strconv.Itoa(int(value.Month())), true
+	case "dddd":
+		return value.Weekday().String(), true
+	case "ddd":
+		return value.Weekday().String()[:3], true
+	case "dd":
+		return value.Weekday().String()[:2], true
 	case "DD":
 		return fmt.Sprintf("%02d", value.Day()), true
 	case "D":

@@ -251,6 +251,10 @@ func (d *dashboardView) fetchDashboard() tea.Cmd {
 }
 
 func (d *dashboardView) resolveVariables() tea.Cmd {
+	return d.resolveVariablesWithChanges(nil)
+}
+
+func (d *dashboardView) resolveVariablesWithChanges(changedVariables map[string]bool) tea.Cmd {
 	if d.dashboard == nil {
 		return nil
 	}
@@ -263,13 +267,14 @@ func (d *dashboardView) resolveVariables() tea.Cmd {
 	previousOptions := cloneVariableOptions(d.variableOptions)
 
 	return func() tea.Msg {
-		options, defaults, err := client.ResolveVariableOptionsWithState(
+		options, defaults, err := client.ResolveVariableOptionsWithChanges(
 			contextBackground(),
 			variables,
 			timeRange,
 			selections,
 			generation == 1,
 			previousOptions,
+			changedVariables,
 		)
 		if err != nil {
 			return variablesResolveErrorMsg{err: err, generation: generation}
@@ -282,10 +287,11 @@ func (d *dashboardView) resolveVariables() tea.Cmd {
 }
 
 func (d *dashboardView) changeVariables(values map[string]string) tea.Cmd {
+	changedVariables := changedVariableNames(d.variableValues, values)
 	d.variableValues = values
 	d.invalidatePanelQueries()
 
-	return d.resolveVariables()
+	return d.resolveVariablesWithChanges(changedVariables)
 }
 
 func (d *dashboardView) invalidatePanelQueries() {
@@ -637,6 +643,22 @@ func dashboardRefreshInterval(value string) time.Duration {
 	}
 
 	return 30 * time.Second
+}
+
+func changedVariableNames(before, after map[string]string) map[string]bool {
+	changed := make(map[string]bool)
+	for name, value := range after {
+		if before[name] != value {
+			changed[name] = true
+		}
+	}
+	for name := range before {
+		if _, ok := after[name]; !ok {
+			changed[name] = true
+		}
+	}
+
+	return changed
 }
 
 func cloneVariableOptions(values map[string][]string) map[string][]string {

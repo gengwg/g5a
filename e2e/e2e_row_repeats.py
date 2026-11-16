@@ -168,12 +168,26 @@ try:
         "group-time-repro.txt",
     )
     assert "Merged" in grouped_time and "MR (count)" in grouped_time
-    dates = ["2023-11-15", "2023-11-14", "2023-11-16"]
+    dates = ["Wednesday 2023-11-15", "Tuesday 2023-11-14", "Thursday 2023-11-16"]
     positions = [grouped_time.index(date) for date in dates]
     assert positions == sorted(positions), grouped_time
     assert "3" in grouped_time and "2" in grouped_time and "0" in grouped_time
     assert "unsupported" not in grouped_time
     print("formatTime, groupBy, and sortBy terminal pipeline: OK")
+
+    dependent = run_tui(
+        "http://127.0.0.1:18082/d/dependentvars",
+        "dependent-variables-repro.txt",
+        keys="v\rj\r\x1b",
+        key_delay_seconds=0.2,
+    )
+    assert "dev-a" in dependent and "22" in dependent
+    with open(artifact("last-queries.jsonl")) as capture:
+        requests = [json.loads(line) for line in capture]
+    queries = [query for request in requests for query in request["queries"]]
+    assert any(query.get("refId") == "vars" and query.get("expr") == 'up{env="dev"}' for query in queries)
+    assert any(query.get("refId") == "A" and query.get("expr") == "dev-a" for query in queries)
+    print("variable edit refreshes dependent options and panel query: OK")
 finally:
     server.terminate()
     server.wait(timeout=5)

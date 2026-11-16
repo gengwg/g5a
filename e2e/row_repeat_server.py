@@ -360,6 +360,28 @@ QUERY_RESULT_DASHBOARD = {
 }
 
 
+DEPENDENT_DASHBOARD = {
+    "title": "Dependent variables", "refresh": False,
+    "time": {"from": "now-1h", "to": "now"},
+    "templating": {"list": [
+        {"name": "env", "type": "custom", "query": "prod,dev", "current": {"value": "prod"}},
+        {
+            "name": "instance", "type": "query", "refresh": 1,
+            "datasource": {"uid": "prom1", "type": "prometheus"},
+            "query": "query_result(up{env=\"$env\"})", "current": {"value": "prod-a"},
+            "options": [],
+        },
+    ]},
+    "panels": [{
+        "id": 59, "type": "stat", "title": "$instance",
+        "datasource": {"uid": "prom1", "type": "prometheus"},
+        "targets": [{"refId": "A", "expr": "$instance", "instant": True, "range": False,
+                     "datasource": {"uid": "prom1", "type": "prometheus"}}],
+        "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+    }],
+}
+
+
 GROUP_TIME_DASHBOARD = {
     "title": "Grouped time", "refresh": False, "timezone": "UTC",
     "time": {"from": "now-1h", "to": "now"},
@@ -371,7 +393,7 @@ GROUP_TIME_DASHBOARD = {
                      "datasource": {"uid": "prom1", "type": "prometheus"}}],
         "transformations": [
             {"id": "formatTime", "options": {
-                "timeField": "Merged", "outputFormat": "YYYY-MM-DD", "timezone": "utc",
+                "timeField": "Merged", "outputFormat": "dddd YYYY-MM-DD", "timezone": "utc",
             }},
             {"id": "groupBy", "options": {"fields": {
                 "MR": {"operation": "aggregate", "aggregations": ["count"]},
@@ -473,6 +495,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"dashboard": TRANSFORM_DASHBOARD})
         elif self.path == "/api/dashboards/uid/grouptime":
             self.send_json({"dashboard": GROUP_TIME_DASHBOARD})
+        elif self.path == "/api/dashboards/uid/dependentvars":
+            self.send_json({"dashboard": DEPENDENT_DASHBOARD})
         elif self.path.startswith("/api/datasources/proxy/uid/prom1/api/v1/label/cluster/values"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             with capture_lock:
@@ -509,7 +533,15 @@ class Handler(BaseHTTPRequestHandler):
         results = {}
         for query in payload["queries"]:
             if query["refId"] == "vars":
-                results["vars"] = {"frames": [query_result_frame()]}
+                expression = query.get("expr", "")
+                if expression in ('up{env="prod"}', 'up{env="dev"}'):
+                    prefix = "prod" if expression == 'up{env="prod"}' else "dev"
+                    results["vars"] = {"frames": [{
+                        "schema": {"refId": "vars", "fields": [{"name": "Value", "type": "string"}]},
+                        "data": {"values": [[f"{prefix}-a", f"{prefix}-b"]]},
+                    }]}
+                else:
+                    results["vars"] = {"frames": [query_result_frame()]}
                 continue
             cluster = query.get("expr", "")
             if cluster in ("joinLeft", "joinRight"):
@@ -557,7 +589,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             if cluster in ("versionA", "versionB"):
                 cluster = "alpha"
-            value = {"alpha": 11, "beta": 22, "on": 42, "prod": 42, "dev": 99, "(alpha|beta)": 42, "temperature": 11.3, "wind": 100.8, "capacity": 340024}.get(cluster, 99)
+            value = {"alpha": 11, "beta": 22, "on": 42, "prod": 42, "dev": 99, "prod-a": 11, "dev-a": 22, "(alpha|beta)": 42, "temperature": 11.3, "wind": 100.8, "capacity": 340024}.get(cluster, 99)
             results[query["refId"]] = {"frames": [frame(query["refId"], value, cluster)]}
         self.send_json({"results": results})
 

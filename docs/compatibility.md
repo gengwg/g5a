@@ -28,7 +28,7 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 | Prometheus `label_values` | Supported |
 | `query_result` and raw instant queries | Supported |
 | Datasource-native `queryType` variables (for example Incident `labels`/`severities`) | Supported |
-| Dependent variables | Resolved in dashboard order |
+| Dependent variables | Resolved in dashboard order; selection edits refresh direct and transitive query/datasource dependencies |
 | Regex extraction | Supported, including the first capture group |
 | Multi-value and All | Supported, including repeat expansion |
 | Raw, pipe, regex, CSV, JSON, query-param formatting | Supported |
@@ -68,7 +68,7 @@ Text panels remain visible in navigation. Alert-list acknowledgement and other a
 - `organize` preserves label fields in their original relative order before numeric values. Other transformations expand labels only when needed by `joinByField`, `groupingToMatrix`, or exact-name/literal-alternative field filters; unrelated labels remain attached to their fields instead of becoming sparse table columns.
 - `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and all `emptyValue` settings (`null`, `true`, `false`, `zero`, and `empty`; the default is an empty string).
 - `groupBy` with ordered group fields, count/distinct/change and first/last reducers, and numeric aggregations. Unsupported reducers produce a visible warning.
-- `formatTime` for time fields with Moment-style date/time tokens, escaped literal text, and explicit or dashboard time zones.
+- `formatTime` for time fields with Moment-style date/time tokens, weekday names, escaped literal text, and explicit or dashboard time zones. Unsupported tokens produce a visible warning.
 - `sortBy` with ordered field rules and numeric-aware stable sorting.
 - `merge` with field-name alignment and null padding for missing fields.
 - `filterFieldsByName`.

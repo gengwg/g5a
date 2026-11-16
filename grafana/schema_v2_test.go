@@ -461,6 +461,93 @@ func TestGetDashboardV2DiscoversCloudNamespace(t *testing.T) {
 			assert.Equal(t, "/apis/dashboard.grafana.app/v2/namespaces/stacks-123456/dashboards/demo", gotPath)
 			assert.Equal(t, "1", gotOrgID)
 			assert.Equal(t, 1, frontendRequests)
+
+			dashboard, err = client.GetDashboard(t.Context(), "demo")
+			require.NoError(t, err)
+			assert.Equal(t, "Cloud dashboard", dashboard.Title)
+			assert.Equal(t, 1, frontendRequests)
+		})
+	}
+}
+
+func TestGetDashboardV2RetriesCustomDomainNamespaceDiscovery(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		settingsStatus int
+		settingsBody   string
+	}{
+		{
+			name:           "500",
+			settingsStatus: http.StatusInternalServerError,
+			settingsBody:   "temporary settings failure",
+		},
+		{
+			name:           "empty settings",
+			settingsStatus: http.StatusOK,
+			settingsBody:   `{}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			frontendRequests := 0
+			fallbackPath := "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/demo"
+			stackPath := "/apis/dashboard.grafana.app/v2/namespaces/stacks-123456/dashboards/demo"
+			var gotPath string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/dashboards/uid/demo":
+					http.Error(w, "legacy unavailable", http.StatusBadRequest)
+				case "/api/frontend/settings":
+					frontendRequests++
+					if frontendRequests == 1 {
+						w.WriteHeader(test.settingsStatus)
+						_, _ = w.Write([]byte(test.settingsBody))
+						return
+					}
+					_, _ = w.Write([]byte(`{"namespace":"stacks-123456"}`))
+				case fallbackPath, stackPath:
+					gotPath = r.URL.Path
+					_, _ = w.Write([]byte(
+						`{"spec":{"title":"Cloud dashboard","elements":{},` +
+							`"layout":{"kind":"GridLayout","spec":{"items":[]}}}}`,
+					))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			target, err := url.Parse(server.URL)
+			require.NoError(t, err)
+			transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+				request.URL.Scheme = target.Scheme
+				request.URL.Host = target.Host
+				return server.Client().Transport.RoundTrip(request)
+			})
+			client, err := grafana.NewClient(
+				"https://grafana.custom.example",
+				grafana.WithOrgID("1"),
+				grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+			)
+			require.NoError(t, err)
+
+			_, err = client.GetDashboard(t.Context(), "demo")
+			require.NoError(t, err)
+			assert.Equal(t, fallbackPath, gotPath)
+			assert.Equal(t, 1, frontendRequests)
+
+			_, err = client.GetDashboard(t.Context(), "demo")
+			require.NoError(t, err)
+			assert.Equal(t, 2, frontendRequests)
+			require.Equal(t, stackPath, gotPath)
+
+			_, err = client.GetDashboard(t.Context(), "demo")
+			require.NoError(t, err)
+			assert.Equal(t, stackPath, gotPath)
+			assert.Equal(t, 2, frontendRequests)
 		})
 	}
 }

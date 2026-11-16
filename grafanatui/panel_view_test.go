@@ -19,6 +19,10 @@ func TestPanelViewReResolvesDependentVariables(t *testing.T) {
 	view.dashboard = dependentVariableDashboard(t)
 	view.panels = grafana.FlattenPanels(view.dashboard.Panels)
 	view.variableValues = map[string]string{"env": "prod", "instance": "prod-a"}
+	view.variableGeneration = 1
+	view.variableOptions = map[string][]string{
+		"env": {"prod", "dev"}, "instance": {"prod-a", "prod-b"},
+	}
 
 	_, command := view.Update(setVariablesMsg{
 		values: map[string]string{"env": "dev", "instance": "prod-a"},
@@ -26,8 +30,8 @@ func TestPanelViewReResolvesDependentVariables(t *testing.T) {
 	if command == nil {
 		t.Fatal("changing variables did not schedule resolution")
 	}
-	if view.variableGeneration != 1 {
-		t.Fatalf("variable generation = %d, want 1", view.variableGeneration)
+	if view.variableGeneration != 2 {
+		t.Fatalf("variable generation = %d, want 2", view.variableGeneration)
 	}
 	if view.generation != 1 {
 		t.Fatalf("panel query generation = %d, want immediate invalidation to 1", view.generation)

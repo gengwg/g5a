@@ -126,13 +126,14 @@ func (p *panelView) handlePanelResult(msg tea.Msg) (view, tea.Cmd) {
 }
 
 func (p *panelView) handleSetVariables(msg setVariablesMsg) (view, tea.Cmd) {
+	changedVariables := changedVariableNames(p.variableValues, msg.values)
 	p.variableValues = msg.values
 	p.loading = true
 	p.data = nil
 	p.err = nil
 	p.invalidatePanelQuery()
 
-	return p, p.resolveVariables()
+	return p, p.resolveVariablesWithChanges(changedVariables)
 }
 
 func (p *panelView) handleSetTimeRange(msg setTimeRangeMsg) (view, tea.Cmd) {
@@ -214,6 +215,10 @@ func (p *panelView) handleVariablesResolveError(
 // resolveVariables returns a command to resolve template variable
 // options via the Prometheus API.
 func (p *panelView) resolveVariables() tea.Cmd {
+	return p.resolveVariablesWithChanges(nil)
+}
+
+func (p *panelView) resolveVariablesWithChanges(changedVariables map[string]bool) tea.Cmd {
 	p.variableGeneration++
 	generation := p.variableGeneration
 	client := p.client
@@ -227,13 +232,14 @@ func (p *panelView) resolveVariables() tea.Cmd {
 	previousOptions := cloneVariableOptions(p.variableOptions)
 
 	return func() tea.Msg {
-		options, defaults, err := client.ResolveVariableOptionsWithState(
+		options, defaults, err := client.ResolveVariableOptionsWithChanges(
 			contextBackground(),
 			variables,
 			timeRange,
 			selections,
 			generation == 1,
 			previousOptions,
+			changedVariables,
 		)
 		if err != nil {
 			return variablesResolveErrorMsg{err: err, generation: generation}

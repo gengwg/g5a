@@ -7,6 +7,7 @@ import (
 
 	"github.com/gengwg/g5a/grafana"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestApplyTransformationsFormatTimeUpstreamFixtures(t *testing.T) {
@@ -47,6 +48,60 @@ func TestApplyTransformationsFormatTimeUpstreamFixtures(t *testing.T) {
 			assert.Equal(t, "time", frame.Schema.Fields[0].Name)
 			assert.JSONEq(t, test.want, string(frame.Data.Values[0]))
 			assert.Empty(t, result.Warnings)
+		})
+	}
+}
+
+func TestApplyTransformationsFormatTimeWeekdayTokens(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		format string
+		want   string
+	}{
+		{format: "dd", want: "Tu"},
+		{format: "ddd", want: "Tue"},
+		{format: "dddd", want: "Tuesday"},
+		{format: "DD", want: "14"},
+		{format: "SSS", want: "000"},
+		{format: "YYYYMMDD", want: "20231114"},
+	} {
+		t.Run(test.format, func(t *testing.T) {
+			t.Parallel()
+			result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+				"A": {Frames: []grafana.DataFrame{newTransformFrame(
+					"A", []grafana.DataFrameField{{Name: "time", Type: "time"}}, `[1700000000000]`,
+				)}},
+			}}
+			grafana.ApplyTransformations(result, []grafana.Transformation{{
+				ID: "formatTime", Options: json.RawMessage(
+					`{"timeField":"time","outputFormat":"` + test.format + `","timezone":"utc"}`,
+				),
+			}})
+			assert.JSONEq(t, `["`+test.want+`"]`, string(result.Results["A"].Frames[0].Data.Values[0]))
+			assert.Empty(t, result.Warnings)
+		})
+	}
+}
+
+func TestApplyTransformationsFormatTimeWarnsOnUnsupportedTokens(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range []string{"Do", "DDD", "DDDD", "YYYYYY", "LL"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+				"A": {Frames: []grafana.DataFrame{newTransformFrame(
+					"A", []grafana.DataFrameField{{Name: "time", Type: "time"}}, `[1700000000000]`,
+				)}},
+			}}
+			grafana.ApplyTransformations(result, []grafana.Transformation{{
+				ID: "formatTime", Options: json.RawMessage(
+					`{"timeField":"time","outputFormat":"` + format + `"}`),
+			}})
+			assert.JSONEq(t, `["`+format+`"]`, string(result.Results["A"].Frames[0].Data.Values[0]))
+			require.Len(t, result.Warnings, 1)
+			assert.Contains(t, result.Warnings[0], "unsupported Moment tokens")
 		})
 	}
 }

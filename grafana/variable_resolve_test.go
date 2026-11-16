@@ -443,6 +443,177 @@ func TestResolveVariableOptionsWithStatePreservesPreviousOptions(t *testing.T) {
 	assert.Equal(t, 1, requests)
 }
 
+func TestResolveVariableOptionsWithChangesRefetchesOnlyDependents(t *testing.T) {
+	t.Parallel()
+
+	var expressions []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/datasources" {
+			_, _ = w.Write([]byte(`[{"uid":"prom1","name":"Prometheus","type":"prometheus"}]`))
+			return
+		}
+		var request struct {
+			Queries []struct {
+				RefID string `json:"refId"`
+				Expr  string `json:"expr"`
+			} `json:"queries"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decoding query: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, query := range request.Queries {
+			expressions = append(expressions, query.Expr)
+			var values []string
+			switch query.Expr {
+			case `up{env="dev"}`:
+				values = []string{"dev-a", "dev-b"}
+			case `up{instance="dev-a"}`:
+				values = []string{"dev-node"}
+			default:
+				t.Errorf("unexpected independent or stale query: %s", query.Expr)
+				values = []string{"unexpected"}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": map[string]any{
+				query.RefID: map[string]any{"frames": []any{map[string]any{
+					"schema": map[string]any{"refId": query.RefID, "fields": []any{
+						map[string]any{"name": "Value", "type": "string"},
+					}},
+					"data": map[string]any{"values": []any{values}},
+				}}},
+			}})
+		}
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	queryVariable := func(name, query, current string, refresh int) grafana.TemplateVariable {
+		return grafana.TemplateVariable{
+			Name: name, Type: "query", Refresh: refresh,
+			Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+			Query:      json.RawMessage(strconv.Quote(query)),
+			Current:    grafana.TemplateVariableCurrent{Value: json.RawMessage(strconv.Quote(current))},
+		}
+	}
+	variables := []grafana.TemplateVariable{
+		{Name: "env", Type: "custom", Query: json.RawMessage(`"prod,dev"`)},
+		queryVariable("instance", `query_result(up{env="$env"})`, "prod-a", 1),
+		queryVariable("node", `query_result(up{instance="$instance"})`, "prod-node", 0),
+		queryVariable("other", `query_result(up{job="api"})`, "api-a", 1),
+	}
+	options, defaults, err := client.ResolveVariableOptionsWithChanges(
+		t.Context(), variables, grafana.TimeRange{From: "now-1h", To: "now"},
+		map[string]string{"env": "dev"}, false,
+		map[string][]string{
+			"env": {"prod", "dev"}, "instance": {"prod-a", "prod-b"},
+			"node": {"prod-node"}, "other": {"api-a"},
+		},
+		map[string]bool{"env": true},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{`up{env="dev"}`, `up{instance="dev-a"}`}, expressions)
+	assert.Equal(t, []string{"dev-a", "dev-b"}, options["instance"])
+	assert.Equal(t, []string{"dev-node"}, options["node"])
+	assert.Equal(t, []string{"api-a"}, options["other"])
+	assert.Equal(t, "dev-a", defaults["instance"])
+	assert.Equal(t, "dev-node", defaults["node"])
+	assert.Equal(t, "api-a", defaults["other"])
+}
+
+func TestResolveVariableOptionsWithChangesRefetchesDatasourceDependents(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		parentName string
+		secondary  bool
+		datasource *grafana.DatasourceRef
+	}{
+		{name: "explicit reference", parentName: "ds", datasource: &grafana.DatasourceRef{UID: "${ds}", Type: "prometheus"}},
+		{name: "implicit nil reference", parentName: "datasource", datasource: nil},
+		{name: "implicit empty UID", parentName: "datasource", datasource: &grafana.DatasourceRef{Type: "prometheus"}},
+		{
+			name: "interpolated empty UID", parentName: "datasource", secondary: true,
+			datasource: &grafana.DatasourceRef{UID: "${other}", Type: "prometheus"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var targets []struct {
+				RefID      string                `json:"refId"`
+				Expr       string                `json:"expr"`
+				Datasource grafana.DatasourceRef `json:"datasource"`
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/datasources" {
+					_, _ = w.Write([]byte(`[
+				{"uid":"prom1","name":"One","type":"prometheus"},
+				{"uid":"prom2","name":"Two","type":"prometheus"}
+			]`))
+					return
+				}
+				var request struct {
+					Queries []struct {
+						RefID      string                `json:"refId"`
+						Expr       string                `json:"expr"`
+						Datasource grafana.DatasourceRef `json:"datasource"`
+					} `json:"queries"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decoding query: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				for _, query := range request.Queries {
+					targets = append(targets, query)
+					_ = json.NewEncoder(w).Encode(map[string]any{"results": map[string]any{
+						query.RefID: map[string]any{"frames": []any{map[string]any{
+							"schema": map[string]any{"refId": query.RefID, "fields": []any{
+								map[string]any{"name": "Value", "type": "string"},
+							}},
+							"data": map[string]any{"values": []any{[]string{"dev-a"}}},
+						}}},
+					}})
+				}
+			}))
+			defer server.Close()
+			client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			variables := []grafana.TemplateVariable{
+				{
+					Name: test.parentName, Type: "datasource", Query: json.RawMessage(`"prometheus"`),
+					Current: grafana.TemplateVariableCurrent{Value: json.RawMessage(`"prom1"`)},
+				},
+			}
+			if test.secondary {
+				variables = append(variables, grafana.TemplateVariable{
+					Name: "other", Type: "custom", Query: json.RawMessage(`""`),
+					Current: grafana.TemplateVariableCurrent{Value: json.RawMessage(`""`)},
+				})
+			}
+			variables = append(variables, grafana.TemplateVariable{
+				Name: "instance", Type: "query", Refresh: 0,
+				Datasource: test.datasource,
+				Query:      json.RawMessage(`"query_result(up{job=\"api\"})"`),
+				Current:    grafana.TemplateVariableCurrent{Value: json.RawMessage(`"prod-a"`)},
+			})
+			options, defaults, err := client.ResolveVariableOptionsWithChanges(
+				t.Context(), variables, grafana.TimeRange{From: "now-1h", To: "now"},
+				map[string]string{test.parentName: "prom2"}, false,
+				map[string][]string{"instance": {"prod-a"}}, map[string]bool{test.parentName: true},
+			)
+			require.NoError(t, err)
+			require.Len(t, targets, 1)
+			assert.Equal(t, "prom2", targets[0].Datasource.UID)
+			assert.Equal(t, `up{job="api"}`, targets[0].Expr)
+			assert.Equal(t, []string{"dev-a"}, options["instance"])
+			assert.Equal(t, "dev-a", defaults["instance"])
+		})
+	}
+}
+
 func TestQueryLabelValuesIncludesTimeRange(t *testing.T) {
 	t.Parallel()
 

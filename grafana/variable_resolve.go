@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -93,8 +94,6 @@ func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
 
 // ResolveVariableOptionsWithState resolves variables and preserves option
 // lists fetched earlier in the dashboard session.
-//
-//nolint:cyclop // variable types and selection handling share one ordered pipeline
 func (c *Client) ResolveVariableOptionsWithState(
 	ctx context.Context,
 	variables []TemplateVariable,
@@ -103,6 +102,38 @@ func (c *Client) ResolveVariableOptionsWithState(
 	initialLoad bool,
 	previousOptions map[string][]string,
 ) (map[string][]string, map[string]string, error) {
+	return c.resolveVariableOptions(ctx, variables, timeRange, selections, initialLoad, previousOptions, nil)
+}
+
+// ResolveVariableOptionsWithChanges re-fetches query variables that depend on
+// changed selections, directly or through an earlier query variable.
+func (c *Client) ResolveVariableOptionsWithChanges(
+	ctx context.Context,
+	variables []TemplateVariable,
+	timeRange TimeRange,
+	selections map[string]string,
+	initialLoad bool,
+	previousOptions map[string][]string,
+	changedVariables map[string]bool,
+) (map[string][]string, map[string]string, error) {
+	return c.resolveVariableOptions(
+		ctx, variables, timeRange, selections, initialLoad, previousOptions, changedVariables,
+	)
+}
+
+// resolveVariableOptions resolves variables in dashboard order.
+//
+//nolint:cyclop // variable types and selection handling share one ordered pipeline
+func (c *Client) resolveVariableOptions(
+	ctx context.Context,
+	variables []TemplateVariable,
+	timeRange TimeRange,
+	selections map[string]string,
+	initialLoad bool,
+	previousOptions map[string][]string,
+	changedVariables map[string]bool,
+) (map[string][]string, map[string]string, error) {
+	invalidated := maps.Clone(changedVariables)
 	options := make(map[string][]string, len(variables))
 	defaults := make(map[string]string, len(variables))
 	var datasources []datasourceInfo
@@ -129,7 +160,8 @@ func (c *Client) ResolveVariableOptionsWithState(
 		case variableTypeInterval:
 			opts = intervalVariableOptions(variable)
 		case "query":
-			if !shouldFetchQueryVariable(variable, initialLoad) {
+			dependsOnChange := invalidateDependentVariable(variable, variables, defaults, invalidated)
+			if !dependsOnChange && !shouldFetchQueryVariable(variable, initialLoad) {
 				if previous, ok := previousOptions[variable.Name]; ok {
 					opts = append([]string(nil), previous...)
 					break
@@ -159,6 +191,58 @@ func (c *Client) ResolveVariableOptionsWithState(
 	}
 
 	return options, defaults, nil
+}
+
+func invalidateDependentVariable(
+	variable TemplateVariable,
+	variables []TemplateVariable,
+	resolved map[string]string,
+	changed map[string]bool,
+) bool {
+	if !queryVariableDependsOn(variable, variables, resolved, changed) {
+		return false
+	}
+	changed[variable.Name] = true
+
+	return true
+}
+
+func queryVariableDependsOn(
+	variable TemplateVariable,
+	variables []TemplateVariable,
+	resolved map[string]string,
+	changed map[string]bool,
+) bool {
+	if len(changed) == 0 {
+		return false
+	}
+	if changed[datasourceVariableName] {
+		datasourceUID := ""
+		if variable.Datasource != nil {
+			datasourceUID = ResolveVariables(variable.Datasource.UID, variables, resolved)
+		}
+		if datasourceUID == "" {
+			return true
+		}
+	}
+	if variable.Datasource != nil &&
+		(textReferencesChangedVariable(variable.Datasource.UID, changed) ||
+			textReferencesChangedVariable(variable.Datasource.Type, changed)) {
+		return true
+	}
+
+	return textReferencesChangedVariable(variable.Definition+"\n"+string(variable.Query), changed)
+}
+
+func textReferencesChangedVariable(text string, changed map[string]bool) bool {
+	for _, match := range variablePattern.FindAllString(text, -1) {
+		name, _ := variableReference(match)
+		if changed[name] {
+			return true
+		}
+	}
+
+	return false
 }
 
 func normalizeIntervalAutoSelection(variable TemplateVariable, selected string) string {
