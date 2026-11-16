@@ -191,7 +191,11 @@ func regexValues(values []string) string {
 		escaped = append(escaped, regexp.QuoteMeta(value))
 	}
 
-	return strings.Join(escaped, "|")
+	if len(escaped) == 1 {
+		return escaped[0]
+	}
+
+	return "(" + strings.Join(escaped, "|") + ")"
 }
 
 // resolveCurrentValue extracts a display/query value from the saved selection.

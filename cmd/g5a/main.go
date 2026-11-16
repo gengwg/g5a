@@ -186,7 +186,7 @@ type grafanaURLParts struct {
 func parseGrafanaURL(rawURL string) grafanaURLParts {
 	parts := grafanaURLParts{
 		baseURL: "", dashUID: "", panelID: 0, orgID: "", timeRangeSet: false,
-		timeRange: grafana.TimeRange{From: "now-1h", To: timeNow},
+		timeRange: grafana.TimeRange{From: "now-1h", To: timeNow, Timezone: "", WeekStart: "", NowDelay: ""},
 		variables: map[string]string{},
 	}
 	parsed, err := url.Parse(rawURL)

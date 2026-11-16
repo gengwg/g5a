@@ -21,7 +21,7 @@ func TestResolveBuiltinVariablesRateInterval(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			got := resolveBuiltinVariables("$__rate_interval", test.intervalMs, 15000, 0)
+			got := resolveBuiltinVariables("$__rate_interval", test.intervalMs, 15000, 0, 0, 0)
 			if got != test.want {
 				t.Errorf("rate interval = %q, want %q", got, test.want)
 			}
@@ -37,7 +37,10 @@ func TestBuildDSQueryTargetHonorsMinStepAndExplicitFields(t *testing.T) {
 		Datasource: &DatasourceRef{UID: "prom1", Type: "prometheus"},
 		raw:        json.RawMessage(`{"expr":"rate(x[$__rate_interval])","interval":"5m","maxDataPoints":42}`),
 	}
-	raw, err := buildDSQueryTarget(target, target.Datasource, nil, nil, 1000, 15000, 3600000, 100, "timeseries")
+	raw, err := buildDSQueryTarget(
+		target, target.Datasource, nil, nil,
+		1000, 15000, 0, 3600000, 3600000, 100, "timeseries",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,10 +59,21 @@ func TestBuildDSQueryTargetHonorsMinStepAndExplicitFields(t *testing.T) {
 	}
 }
 
+func TestResolveBuiltinVariablesSupportsBracedAndMillisecondForms(t *testing.T) {
+	t.Parallel()
+
+	expression := "${__interval}|$__interval|${__rate_interval}|$__rate_interval|${__rate_interval_ms}|$__from|$__to"
+	got := resolveBuiltinVariables(expression, 15000, 15000, 1000, 2000, 1000)
+	want := "15s|15s|1m|1m|60000|1000|2000"
+	if got != want {
+		t.Errorf("built-ins = %q, want %q", got, want)
+	}
+}
+
 func TestResolveBuiltinVariablesRateIntervalUsesDatasourceScrapeInterval(t *testing.T) {
 	t.Parallel()
 
-	if got := resolveBuiltinVariables("$__rate_interval", 15000, 60000, 0); got != "4m" {
+	if got := resolveBuiltinVariables("$__rate_interval", 15000, 60000, 0, 0, 0); got != "4m" {
 		t.Errorf("rate interval = %q, want 4m", got)
 	}
 }

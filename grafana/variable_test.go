@@ -67,7 +67,7 @@ func TestResolveVariables_MultiValue(t *testing.T) {
 	}
 
 	got := grafana.ResolveVariables(`up{instance=~"$instance"}`, variables, nil)
-	want := `up{instance=~"host1:9090|host2:9090|host3:9090"}`
+	want := `up{instance=~"(host1:9090|host2:9090|host3:9090)"}`
 
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -141,7 +141,7 @@ func TestResolveVariables_RegexEscapesMultiValue(t *testing.T) {
 	}}
 
 	got := grafana.ResolveVariables(`up{cluster=~"${cluster:regex}"}`, variables, nil)
-	want := `up{cluster=~"a\.1|b-2"}`
+	want := `up{cluster=~"(a\.1|b-2)"}`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -163,7 +163,7 @@ func TestResolveVariables_All(t *testing.T) {
 	}}
 
 	got := grafana.ResolveVariables(`up{cluster=~"$cluster"}`, variables, nil)
-	want := `up{cluster=~"alpha|beta"}`
+	want := `up{cluster=~"(alpha|beta)"}`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

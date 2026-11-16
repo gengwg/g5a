@@ -150,6 +150,8 @@ func (c *Client) QueryPanel(
 			variableOverrides,
 			intervalMs,
 			scrapeIntervalMs,
+			fromMs,
+			toMs,
 			toMs-fromMs,
 			maxDataPoints,
 			panel.Type,
@@ -280,6 +282,8 @@ func buildDSQueryTarget(
 	overrides map[string]string,
 	intervalMs int,
 	scrapeIntervalMs int,
+	fromMs int64,
+	toMs int64,
 	rangeMs int64,
 	maxDataPoints int,
 	panelType string,
@@ -305,6 +309,8 @@ func buildDSQueryTarget(
 		overrides,
 		intervalMs,
 		scrapeIntervalMs,
+		fromMs,
+		toMs,
 		rangeMs,
 	)
 	targetMap, ok := interpolated.(map[string]any)
@@ -365,12 +371,14 @@ func interpolateTargetValue(
 	overrides map[string]string,
 	intervalMs int,
 	scrapeIntervalMs int,
+	fromMs int64,
+	toMs int64,
 	rangeMs int64,
 ) any {
 	switch typed := value.(type) {
 	case string:
 		resolved := ResolveVariables(typed, variables, overrides)
-		return resolveBuiltinVariables(resolved, intervalMs, scrapeIntervalMs, rangeMs)
+		return resolveBuiltinVariables(resolved, intervalMs, scrapeIntervalMs, fromMs, toMs, rangeMs)
 	case map[string]any:
 		result := make(map[string]any, len(typed))
 		for key, child := range typed {
@@ -380,6 +388,8 @@ func interpolateTargetValue(
 				overrides,
 				intervalMs,
 				scrapeIntervalMs,
+				fromMs,
+				toMs,
 				rangeMs,
 			)
 		}
@@ -393,6 +403,8 @@ func interpolateTargetValue(
 				overrides,
 				intervalMs,
 				scrapeIntervalMs,
+				fromMs,
+				toMs,
 				rangeMs,
 			)
 		}
@@ -434,12 +446,14 @@ func (c *Client) queryDatasource(
 	return result, nil
 }
 
-var autoIntervalPattern = regexp.MustCompile(`\$__auto_interval_\w+`)
+var autoIntervalPattern = regexp.MustCompile(`\$\{?__auto_interval_\w+\}?`)
 
 func resolveBuiltinVariables(
 	expression string,
 	intervalMs int,
 	scrapeIntervalMs int,
+	fromMs int64,
+	toMs int64,
 	rangeMs int64,
 ) string {
 	expression = autoIntervalPattern.ReplaceAllString(
@@ -454,11 +468,19 @@ func resolveBuiltinVariables(
 		name  string
 		value string
 	}{
+		{"${__rate_interval_ms}", strconv.Itoa(rateIntervalMs)},
+		{"$__rate_interval_ms", strconv.Itoa(rateIntervalMs)},
+		{"${__rate_interval}", formatDuration(rateIntervalMs)},
 		{"$__rate_interval", formatDuration(rateIntervalMs)},
+		{"${__interval}", formatDuration(intervalMs)},
+		{"$__interval", formatDuration(intervalMs)},
+		{"${__from}", strconv.FormatInt(fromMs, 10)},
+		{"$__from", strconv.FormatInt(fromMs, 10)},
+		{"${__to}", strconv.FormatInt(toMs, 10)},
+		{"$__to", strconv.FormatInt(toMs, 10)},
 		{"$__interval_ms", strconv.Itoa(intervalMs)},
 		{"$__range_ms", strconv.FormatInt(rangeMs, 10)},
 		{"$__range_s", strconv.FormatInt(rangeMs/1000, 10)},
-		{"$__interval", formatDuration(intervalMs)},
 		{"$__range", formatDuration(int(rangeMs))},
 		{"$__auto", formatDuration(intervalMs)},
 	}
