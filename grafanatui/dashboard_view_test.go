@@ -18,6 +18,25 @@ import (
 	"github.com/gengwg/g5a/grafana"
 )
 
+func TestAppHeaderUsesG5AName(t *testing.T) {
+	t.Parallel()
+
+	client, err := grafana.NewClient("https://grafana.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := NewApp(client, Options{}).renderHeader()
+	if !strings.Contains(header, " g5a") {
+		t.Errorf("header does not contain g5a: %q", header)
+	}
+	if strings.Contains(header, "grafana-tui") {
+		t.Errorf("header retains the upstream application name: %q", header)
+	}
+	if !strings.Contains(header, "https://grafana.example.com") {
+		t.Errorf("header does not contain the Grafana URL: %q", header)
+	}
+}
+
 func TestDashboardViewRendersRepeatedPanels(t *testing.T) {
 	t.Parallel()
 

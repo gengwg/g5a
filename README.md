@@ -11,8 +11,9 @@ The name is a numeronym for **Grafana**: `g + 5 letters + a`, in the same style 
 ![Public Grafana Play dashboard browser](docs/images/public-dashboard-list.png)
 ![Public synthetic service health dashboard](docs/images/public-demo-grid.png)
 ![Public synthetic storage IOPS dashboard](docs/images/public-iops-demo.png)
+![Redacted cluster and node bandwidth dashboard](docs/images/redacted-bandwidth-demo.png)
 
-Screenshots use public or synthetic demo data, never private company dashboards.
+Screenshots use public, synthetic, or redacted data. Private instance, cluster, and host identifiers are removed.
 
 ## Features
 

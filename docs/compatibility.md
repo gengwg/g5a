@@ -1,6 +1,6 @@
 # Grafana compatibility
 
-`grafana-tui` aims for operational fidelity: values, mapped states, colors, table rows, and layout should remain meaningful in a terminal. It does not attempt pixel-perfect browser rendering or complete Grafana plugin compatibility.
+`g5a` aims for operational fidelity: values, mapped states, colors, table rows, and layout should remain meaningful in a terminal. It does not attempt pixel-perfect browser rendering or complete Grafana plugin compatibility.
 
 Unsupported transformations and panel types are shown explicitly rather than silently presented as healthy data.
 

@@ -1,6 +1,7 @@
 package grafanatui
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -14,11 +15,27 @@ func firstSeriesLabelValue(name string) (string, bool) {
 	return values[firstKey], true
 }
 
-func seriesLabelValueForKey(name, wanted string) (string, bool) {
-	values, _ := seriesLabelPairs(name)
-	value, ok := values[wanted]
+func preferredCategoryLabel(values map[string]string, firstKey string) (string, bool) {
+	if value := values["vendor"]; value != "" {
+		return value, true
+	}
+	if firstKey != "" {
+		value := values[firstKey]
 
-	return value, ok
+		return value, value != ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if value := values[key]; value != "" {
+			return value, true
+		}
+	}
+
+	return "", false
 }
 
 func seriesLabelPairs(name string) (map[string]string, string) {

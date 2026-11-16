@@ -158,10 +158,8 @@ func (r *barChartRenderer) renderFlat(
 }
 
 func barCategoryName(name string) string {
-	if value, ok := seriesLabelValueForKey(name, "vendor"); ok && value != "" {
-		return value
-	}
-	if value, ok := firstSeriesLabelValue(name); ok && value != "" {
+	values, firstKey := seriesLabelPairs(name)
+	if value, ok := preferredCategoryLabel(values, firstKey); ok {
 		return value
 	}
 

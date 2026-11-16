@@ -109,6 +109,19 @@ func presentField(
 	return presentation
 }
 
+func fieldCategoryName(field grafana.DataFrameField, value any) string {
+	configuredName := resolveFieldConfig(field.Config, field.Name).displayName
+	presentation := presentField(nil, field, value)
+	if configuredName != "" {
+		return presentation.DisplayName
+	}
+	if name, ok := preferredCategoryLabel(field.Labels, ""); ok {
+		return name
+	}
+
+	return presentation.DisplayName
+}
+
 func compactDatasourceName(name string) string {
 	name = strings.TrimSpace(name)
 	open := strings.Index(name, "{")
