@@ -422,6 +422,37 @@ func TestTableRendererFooterAndCustomUnit(t *testing.T) {
 	}
 }
 
+func TestTableRendererUnconfiguredNumbersStayExact(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{{
+			Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{
+				{Name: "cluster", Type: "string"},
+				{Name: "GPUs", Type: "number"},
+			}},
+			Data: grafana.DataFrameData{Values: []json.RawMessage{
+				json.RawMessage(`["alpha","beta"]`),
+				json.RawMessage(`[1024,2048]`),
+			}},
+		}}},
+	}}
+
+	panel := emptyPanel()
+	panel.Options = json.RawMessage(`{"footer":{"show":true,"reducer":["sum"],"fields":""}}`)
+	output := grafanatui.RendererForPanel("table").Render(result, panel, 60, 6, nil)
+	for _, expected := range []string{"1024", "2048", "3072"} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("exact table value %q is missing:\n%s", expected, output)
+		}
+	}
+	for _, abbreviated := range []string{"1.0K", "2.0K", "3.1K"} {
+		if strings.Contains(output, abbreviated) {
+			t.Errorf("unconfigured table value was abbreviated as %q:\n%s", abbreviated, output)
+		}
+	}
+}
+
 func TestTableRenderer_NarrowColumnsRemainReadable(t *testing.T) {
 	t.Parallel()
 

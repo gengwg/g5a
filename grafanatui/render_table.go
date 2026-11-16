@@ -399,6 +399,23 @@ func compareTableValues(left, right any) int {
 	)
 }
 
+func presentTableField(
+	fieldConfig json.RawMessage,
+	field grafana.DataFrameField,
+	value any,
+) fieldPresentation {
+	presentation := presentField(fieldConfig, field, value)
+	config := resolveFieldConfig(field.Config, field.Name)
+	config = applyFieldConfig(config, fieldConfig, field.Name)
+	if field.Type == fieldTypeNumber && config.unit == "" && len(config.mappings) == 0 {
+		if number, ok := fieldNumber(value); ok {
+			presentation.Text = formatRawNumber(number, config.decimals)
+		}
+	}
+
+	return presentation
+}
+
 func presentTableRows(
 	rows []tableRow,
 	columns []tableColumn,
@@ -408,7 +425,7 @@ func presentTableRows(
 	for rowIndex, row := range rows {
 		presented[rowIndex] = make([]fieldPresentation, len(columns))
 		for columnIndex, column := range columns {
-			presented[rowIndex][columnIndex] = presentField(
+			presented[rowIndex][columnIndex] = presentTableField(
 				fieldConfig,
 				column.field,
 				row.values[columnIndex],
@@ -532,7 +549,7 @@ func presentFooterCell(
 	}
 	switch reducer {
 	case calcSum:
-		return presentField(fieldConfig, column.field, reduceStatColumn(values, []string{calcSum}))
+		return presentTableField(fieldConfig, column.field, reduceStatColumn(values, []string{calcSum}))
 	case calcCount:
 		cell.Text = strconv.Itoa(len(values))
 

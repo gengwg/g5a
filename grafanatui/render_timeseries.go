@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	legendLines        = 2
-	legendNameMaxWidth = 40
+	legendLines          = 2
+	legendNameMaxWidth   = 40
+	legendMinSeriesWidth = 16
 )
 
 // timeSeriesRenderer renders time series data as a braille line chart.
@@ -347,9 +348,22 @@ func trimLegendScheme(name string) string {
 		if start < 0 {
 			continue
 		}
-		parsed, err := url.Parse(name[start:])
+		end := len(name)
+		if space := strings.IndexAny(name[start:], " \t\r\n"); space >= 0 {
+			end = start + space
+		}
+		parsed, err := url.Parse(name[start:end])
 		if err == nil && parsed.Host != "" {
-			return name[:start] + name[start+len(scheme):]
+			if start > 0 || end < len(name) {
+				result := strings.TrimSpace(name[:start]) + " " + parsed.Host
+				if suffix := strings.TrimSpace(name[end:]); suffix != "" {
+					result += " " + suffix
+				}
+
+				return strings.TrimSpace(result)
+			}
+
+			return name[:start] + name[start+len(scheme):end] + name[end:]
 		}
 	}
 
@@ -375,7 +389,8 @@ func buildLegendWithCalculations(
 	parts := make([]string, 0, len(seriesNames))
 	seriesWidth := maxWidth
 	if len(seriesNames) > 0 {
-		seriesWidth = max((maxWidth-2*(len(seriesNames)-1))/len(seriesNames), 1)
+		minimumWidth := min(maxWidth, legendMinSeriesWidth)
+		seriesWidth = max((maxWidth-2*(len(seriesNames)-1))/len(seriesNames), minimumWidth)
 	}
 	for index, name := range seriesNames {
 		style := lipgloss.NewStyle().Foreground(chartColor(index))

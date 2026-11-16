@@ -36,11 +36,24 @@ func TestCompactLegendNameWithVantagePrefix(t *testing.T) {
 	if strings.Contains(got, "://") {
 		t.Errorf("embedded scheme was not removed: %q", got)
 	}
-	if !strings.Contains(got, "Frankfurt") || !strings.HasSuffix(got, "healthz") {
+	if !strings.Contains(got, "Frankfurt") || !strings.HasSuffix(got, "example.com") {
 		t.Errorf("compacted name lost identifying context: %q", got)
+	}
+	if strings.Contains(got, "healthz") {
+		t.Errorf("prefixed URL retained its path instead of its host: %q", got)
 	}
 	if lipgloss.Width(got) > 24 {
 		t.Errorf("compacted name exceeds width: %q", got)
+	}
+}
+
+func TestCompactLegendNamePreservesHostAndVantageSuffix(t *testing.T) {
+	t.Parallel()
+
+	got := compactLegendName("ample-tiger https://service.example.com/healthz ← Frankfurt", 50)
+	want := "ample-tiger service.example.com ← Frankfurt"
+	if got != want {
+		t.Errorf("compacted name = %q, want %q", got, want)
 	}
 }
 
@@ -77,6 +90,33 @@ func TestBottomLegendSharesWidthBetweenSeries(t *testing.T) {
 	}
 	if lipgloss.Width(output) > 40 {
 		t.Errorf("legend exceeds width 40: %q", output)
+	}
+}
+
+func TestBottomLegendWrapsManySeriesWithoutCollapsingNames(t *testing.T) {
+	t.Parallel()
+
+	names := []string{
+		"Frankfurt https://85.155.65.1/healthz",
+		"NorthVirginia https://85.155.65.2/healthz",
+		"Singapore https://85.155.65.3/healthz",
+		"Sydney https://85.155.65.4/healthz",
+		"Frankfurt https://85.155.65.5/healthz",
+		"NorthVirginia https://85.155.65.6/healthz",
+	}
+	data := make(map[string]timeSeriesEntry, len(names))
+	for _, name := range names {
+		data[name] = timeSeriesEntry{values: []float64{1}}
+	}
+	output := buildLegendWithCalculations(names, data, 60, nil)
+	if strings.Count(output, "■") != len(names) {
+		t.Errorf("series were crowded out of the two-line legend: %q", output)
+	}
+	if lipgloss.Height(output) != 2 {
+		t.Errorf("legend has %d lines, want 2", lipgloss.Height(output))
+	}
+	if strings.Contains(output, "/healthz") {
+		t.Errorf("prefixed URLs retained paths instead of hosts: %q", output)
 	}
 }
 
