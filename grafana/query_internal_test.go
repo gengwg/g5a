@@ -73,6 +73,18 @@ func TestResolveBuiltinVariablesSupportsBracedAndMillisecondForms(t *testing.T) 
 	}
 }
 
+func TestResolveBuiltinVariablesMillisecondAndRangeForms(t *testing.T) {
+	t.Parallel()
+
+	expression := "$__interval_ms ${__interval_ms} $__range_ms ${__range_ms} " +
+		"${__range} $__range ${__range_s} $__range_s"
+	got := resolveBuiltinVariables(expression, 15000, 15000, 1000, 2000, 3600000)
+	want := "15000 15000 3600000 3600000 1h 1h 3600 3600"
+	if got != want {
+		t.Errorf("built-ins = %q, want %q", got, want)
+	}
+}
+
 func TestResolveBuiltinVariablesRateIntervalUsesDatasourceScrapeInterval(t *testing.T) {
 	t.Parallel()
 
@@ -193,6 +205,14 @@ func TestResolveTimeRangeAtHonorsTimezoneWeekStartAndDelay(t *testing.T) {
 	wantFrom = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC).UnixMilli()
 	if from != wantFrom {
 		t.Errorf("Monday week start = %d, want %d", from, wantFrom)
+	}
+
+	from, _ = resolveTimeRangeAt(TimeRange{
+		From: "now/w", To: "now/w", WeekStart: "saturday", Timezone: "UTC", NowDelay: "",
+	}, now)
+	wantFrom = time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if from != wantFrom {
+		t.Errorf("Saturday week start = %d, want %d", from, wantFrom)
 	}
 
 	from, _ = resolveTimeRangeAt(TimeRange{From: "now", To: "now", NowDelay: "1h", Timezone: "UTC", WeekStart: ""}, now)

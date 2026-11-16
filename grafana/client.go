@@ -35,6 +35,10 @@ type Client struct {
 	dsTypeCache map[string]string
 	scrapeCache map[string]int
 	dsMutex     sync.Mutex
+
+	namespaceCache    string
+	namespaceResolved bool
+	namespaceMutex    sync.Mutex
 }
 
 // ClientOption configures a [Client].

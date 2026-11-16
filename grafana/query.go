@@ -550,18 +550,22 @@ func resolveBuiltinVariables(
 	}{
 		{"${__rate_interval_ms}", strconv.Itoa(rateIntervalMs)},
 		{"$__rate_interval_ms", strconv.Itoa(rateIntervalMs)},
+		{"${__interval_ms}", strconv.Itoa(intervalMs)},
+		{"$__interval_ms", strconv.Itoa(intervalMs)},
+		{"${__range_ms}", strconv.FormatInt(rangeMs, 10)},
+		{"$__range_ms", strconv.FormatInt(rangeMs, 10)},
+		{"${__range_s}", strconv.FormatInt(rangeMs/1000, 10)},
+		{"$__range_s", strconv.FormatInt(rangeMs/1000, 10)},
 		{"${__rate_interval}", formatDuration(rateIntervalMs)},
 		{"$__rate_interval", formatDuration(rateIntervalMs)},
 		{"${__interval}", formatDuration(intervalMs)},
 		{"$__interval", formatDuration(intervalMs)},
+		{"${__range}", formatDuration(int(rangeMs))},
+		{"$__range", formatDuration(int(rangeMs))},
 		{"${__from}", strconv.FormatInt(fromMs, 10)},
 		{"$__from", strconv.FormatInt(fromMs, 10)},
 		{"${__to}", strconv.FormatInt(toMs, 10)},
 		{"$__to", strconv.FormatInt(toMs, 10)},
-		{"$__interval_ms", strconv.Itoa(intervalMs)},
-		{"$__range_ms", strconv.FormatInt(rangeMs, 10)},
-		{"$__range_s", strconv.FormatInt(rangeMs/1000, 10)},
-		{"$__range", formatDuration(int(rangeMs))},
 		{"$__auto", formatDuration(intervalMs)},
 	}
 	for _, replacement := range replacements {
@@ -734,8 +738,11 @@ func roundTimeToUnit(value time.Time, unit string, roundUp bool, weekStart strin
 			value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, location,
 		)
 		offset := int(start.Weekday())
-		if strings.EqualFold(weekStart, "monday") || strings.EqualFold(weekStart, "mon") {
+		switch {
+		case strings.EqualFold(weekStart, "monday"), strings.EqualFold(weekStart, "mon"):
 			offset = (offset + 6) % 7
+		case strings.EqualFold(weekStart, "saturday"), strings.EqualFold(weekStart, "sat"):
+			offset = (offset + 1) % 7
 		}
 		start = start.AddDate(0, 0, -offset)
 		next = start.AddDate(0, 0, 7)

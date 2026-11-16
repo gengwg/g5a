@@ -118,7 +118,7 @@ func (d *dashboardView) Update(msg tea.Msg) (view, tea.Cmd) {
 	case setVariablesMsg:
 		return d, d.changeVariables(msg.values)
 	case setTimeRangeMsg:
-		d.timeRange = msg.timeRange
+		d.timeRange = preserveTimeRangeSettings(d.timeRange, msg.timeRange)
 		d.invalidatePanelQueries()
 		return d, d.resolveVariables()
 	case tea.KeyMsg:
@@ -357,6 +357,7 @@ func (d *dashboardView) fetchPanel(
 ) tea.Cmd {
 	timeRange := d.timeRange
 	variables := d.dashboard.Templating.List
+	variableOptions := d.variableOptions
 	allPanels := grafana.FlattenPanels(d.dashboard.Panels)
 
 	return func() tea.Msg {
@@ -379,6 +380,7 @@ func (d *dashboardView) fetchPanel(
 			maxDataPoints,
 			variables,
 			instance.Variables,
+			variableOptions,
 			allPanels,
 		)
 		if err != nil {

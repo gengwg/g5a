@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -412,6 +413,51 @@ func TestGetDashboardV2Beta1TransformationID(t *testing.T) {
 	require.Len(t, dashboard.Panels[0].Transformations, 1)
 	assert.Equal(t, "limit", dashboard.Panels[0].Transformations[0].ID)
 	assert.JSONEq(t, `{"limit":10}`, string(dashboard.Panels[0].Transformations[0].Options))
+}
+
+func TestGetDashboardV2DiscoversCloudNamespace(t *testing.T) {
+	t.Parallel()
+
+	frontendRequests := 0
+	var gotPath, gotOrgID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dashboards/uid/demo":
+			http.Error(w, "legacy unavailable", http.StatusBadRequest)
+		case "/api/frontend/settings":
+			frontendRequests++
+			gotOrgID = r.Header.Get("X-Grafana-Org-Id")
+			_, _ = w.Write([]byte(`{"namespace":"stacks-123456"}`))
+		case "/apis/dashboard.grafana.app/v2/namespaces/stacks-123456/dashboards/demo":
+			gotPath = r.URL.Path
+			_, _ = w.Write([]byte(
+				`{"spec":{"title":"Cloud dashboard","elements":{},` +
+					`"layout":{"kind":"GridLayout","spec":{"items":[]}}}}`,
+			))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		request.URL.Scheme = target.Scheme
+		request.URL.Host = target.Host
+		return server.Client().Transport.RoundTrip(request)
+	})
+	client, err := grafana.NewClient(
+		"https://stack.grafana.net",
+		grafana.WithOrgID("1"),
+		grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+	)
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	assert.Equal(t, "Cloud dashboard", dashboard.Title)
+	assert.Equal(t, "/apis/dashboard.grafana.app/v2/namespaces/stacks-123456/dashboards/demo", gotPath)
+	assert.Equal(t, "1", gotOrgID)
+	assert.Equal(t, 1, frontendRequests)
 }
 
 func TestGetDashboardV2NestedRowRepeats(t *testing.T) {

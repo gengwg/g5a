@@ -232,11 +232,6 @@ ALL_DASHBOARD = {
         "name": "cluster", "type": "custom", "query": "alpha,beta",
         "multi": True, "includeAll": True,
         "current": {"text": "All", "value": "$__all"},
-        "options": [
-            {"text": "All", "value": "$__all"},
-            {"text": "alpha", "value": "alpha"},
-            {"text": "beta", "value": "beta"},
-        ],
     }]},
     "panels": [{
         "id": 47, "type": "stat", "title": "All selection",

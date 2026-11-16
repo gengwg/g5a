@@ -94,6 +94,20 @@ func (t *timeRangePickerView) handleKeyMsg(msg tea.KeyMsg) (view, tea.Cmd) {
 // selectTimeRange pops this view and sends the selected time range.
 // We use popAndSetTimeRangeMsg so the app can pop first, then
 // forward the time range to the now-active view.
+func preserveTimeRangeSettings(current, next grafana.TimeRange) grafana.TimeRange {
+	if next.Timezone == "" {
+		next.Timezone = current.Timezone
+	}
+	if next.WeekStart == "" {
+		next.WeekStart = current.WeekStart
+	}
+	if next.NowDelay == "" {
+		next.NowDelay = current.NowDelay
+	}
+
+	return next
+}
+
 func (t *timeRangePickerView) selectTimeRange() (view, tea.Cmd) {
 	selected, ok := t.list.SelectedItem().(timePreset)
 	if !ok {

@@ -22,6 +22,7 @@ var (
 	errUnsupportedV2Element = errors.New("unsupported dashboard element kind")
 	errInvalidV2Query       = errors.New("invalid dashboard v2 query")
 	errNestedV2RowRepeat    = errors.New("nested dashboard v2 row repeats are not supported")
+	errEmptyCloudNamespace  = errors.New("cloud frontend settings returned an empty namespace")
 )
 
 type dashboardV2Resource struct {
@@ -154,31 +155,45 @@ type dashboardV2Variable struct {
 	Spec json.RawMessage `json:"spec"`
 }
 
-func (c *Client) dashboardNamespace() string {
-	cloud := strings.HasSuffix(c.baseURL.Hostname(), ".grafana.net")
-	if c.orgID != "" {
-		if cloud {
-			return "stacks-" + c.orgID
+func (c *Client) dashboardNamespace(ctx context.Context) (string, error) {
+	if !strings.HasSuffix(c.baseURL.Hostname(), ".grafana.net") {
+		if c.orgID == "" || c.orgID == "1" {
+			return defaultDashboardNamespace, nil
 		}
 
-		return "org-" + c.orgID
-	}
-	if cloud {
-		stack := strings.SplitN(c.baseURL.Hostname(), ".", 2)[0]
-		if stack != "" {
-			return "stacks-" + stack
-		}
+		return "org-" + c.orgID, nil
 	}
 
-	return defaultDashboardNamespace
+	c.namespaceMutex.Lock()
+	defer c.namespaceMutex.Unlock()
+	if c.namespaceResolved {
+		return c.namespaceCache, nil
+	}
+	var settings struct {
+		Namespace string `json:"namespace"`
+	}
+	if err := c.doJSON(ctx, "/api/frontend/settings", &settings); err != nil {
+		return "", fmt.Errorf("discovering Grafana Cloud namespace: %w", err)
+	}
+	if settings.Namespace == "" {
+		return "", errEmptyCloudNamespace
+	}
+	c.namespaceCache = settings.Namespace
+	c.namespaceResolved = true
+
+	return c.namespaceCache, nil
 }
 
 func (c *Client) getDashboardV2(ctx context.Context, uid string) (*Dashboard, error) {
+	namespace, err := c.dashboardNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
 	versions := []string{"v2", "v2beta1", "v1beta1", "v1"}
 	var lastErr error
 	for _, version := range versions {
 		path := "/apis/dashboard.grafana.app/" + version +
-			"/namespaces/" + url.PathEscape(c.dashboardNamespace()) + "/dashboards/" + url.PathEscape(uid)
+			"/namespaces/" + url.PathEscape(namespace) + "/dashboards/" + url.PathEscape(uid)
 		var raw json.RawMessage
 		if err := c.doJSON(ctx, path, &raw); err != nil {
 			lastErr = err

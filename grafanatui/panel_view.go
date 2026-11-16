@@ -136,7 +136,7 @@ func (p *panelView) handleSetVariables(msg setVariablesMsg) (view, tea.Cmd) {
 }
 
 func (p *panelView) handleSetTimeRange(msg setTimeRangeMsg) (view, tea.Cmd) {
-	p.timeRange = msg.timeRange
+	p.timeRange = preserveTimeRangeSettings(p.timeRange, msg.timeRange)
 	p.loading = true
 	p.data = nil
 	p.err = nil
@@ -408,6 +408,7 @@ func (p *panelView) fetchPanelData() tea.Cmd {
 	timeRange := p.timeRange
 	variables := p.dashboard.Templating.List
 	variableOverrides := p.variableValues
+	variableOptions := p.variableOptions
 	width := p.width
 
 	if width <= 0 {
@@ -423,7 +424,7 @@ func (p *panelView) fetchPanelData() tea.Cmd {
 	return func() tea.Msg {
 		result, err := queryPanelData(
 			ctx, client, p.uid, panel, timeRange, width,
-			variables, variableOverrides, allPanels,
+			variables, variableOverrides, variableOptions, allPanels,
 		)
 		if err != nil {
 			return panelErrorMsg{err: err, generation: generation}
