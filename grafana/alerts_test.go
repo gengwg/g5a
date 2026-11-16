@@ -446,6 +446,62 @@ func TestQueryAlertListAcceptsEmptyLabelMatcherValues(t *testing.T) {
 	}
 }
 
+func TestQueryAlertListUsesHealthAndInstancesForNoDataAndError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"groups":[{"name":"g","file":"f","rules":[
+			{"name":"No data health","state":"inactive","health":"nodata","type":"alerting","annotations":{},"alerts":[]},
+			{"name":"Error health","state":"inactive","health":"error","type":"alerting","annotations":{},"alerts":[]},
+			{"name":"Instance no data","state":"inactive","health":"ok","type":"alerting","annotations":{},
+			"alerts":[{"state":"NoData","labels":{},"activeAt":"2026-01-01T00:00:00Z"}]},
+			{"name":"Normal","state":"inactive","health":"ok","type":"alerting","annotations":{},
+			"alerts":[{"state":"normal","labels":{},"activeAt":"2026-01-01T00:00:00Z"}]}
+		]}]}}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		filter string
+		want   []string
+	}{
+		{filter: "noData", want: []string{"No data health", "Instance no data"}},
+		{filter: "error", want: []string{"Error health"}},
+	} {
+		t.Run(test.filter, func(t *testing.T) {
+			t.Parallel()
+			options, err := json.Marshal(map[string]any{
+				"datasource": "grafana", "stateFilter": map[string]bool{test.filter: true},
+			})
+			require.NoError(t, err)
+			result, err := client.QueryAlertList(
+				t.Context(), grafana.Panel{Options: options}, "", nil, nil,
+			)
+			require.NoError(t, err)
+			names := make([]string, 0, len(result.Alerts))
+			for _, rule := range result.Alerts {
+				names = append(names, rule.Name)
+			}
+			assert.ElementsMatch(t, test.want, names)
+		})
+	}
+
+	result, err := client.QueryAlertList(
+		t.Context(), grafana.Panel{Options: json.RawMessage(`{"datasource":"grafana"}`)}, "", nil, nil,
+	)
+	require.NoError(t, err)
+	states := make(map[string]string, len(result.Alerts))
+	for _, rule := range result.Alerts {
+		states[rule.Name] = rule.State
+	}
+	assert.Equal(t, "no_data", states["No data health"])
+	assert.Equal(t, "error", states["Error health"])
+	assert.Equal(t, "no_data", states["Instance no data"])
+	assert.Equal(t, "inactive", states["Normal"])
+}
+
 func TestQueryAlertListAppliesRuleStateBeforeInstanceState(t *testing.T) {
 	t.Parallel()
 

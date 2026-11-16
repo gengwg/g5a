@@ -305,12 +305,44 @@ func convertPrometheusRules(response prometheusRulesResponse) []AlertRule {
 					State: alert.State, Labels: alert.Labels, ActiveAt: alert.ActiveAt,
 				})
 			}
+			if normalizeAlertState(converted.State) == alertStateNormal {
+				converted.State = alertHealthState(rule.Health, converted.State)
+			}
+			if normalizeAlertState(converted.State) == alertStateNormal {
+				converted.State = alertInstancesState(converted.Instances, converted.State)
+			}
 			converted.ActiveAt = earliestAlertTime(converted.Instances)
 			rules = append(rules, converted)
 		}
 	}
 
 	return rules
+}
+
+func alertHealthState(health, current string) string {
+	switch health {
+	case "nodata":
+		return alertStateNoData
+	case alertStateError:
+		return alertStateError
+	default:
+		return current
+	}
+}
+
+func alertInstancesState(instances []AlertInstance, current string) string {
+	for _, instance := range instances {
+		if normalizeAlertState(instance.State) == alertStateError {
+			return alertStateError
+		}
+	}
+	for _, instance := range instances {
+		if normalizeAlertState(instance.State) == alertStateNoData {
+			return alertStateNoData
+		}
+	}
+
+	return current
 }
 
 func (c *Client) fetchLegacyAlerts(ctx context.Context) ([]AlertRule, error) {
@@ -490,9 +522,15 @@ func alertRuleMetadataMatches(rule AlertRule, opts alertListOptions, dashboardUI
 }
 
 func includeInactiveAlertRule(rule AlertRule, opts alertListOptions, matcherCount int) bool {
+	state := normalizeAlertState(rule.State)
+	if (state == alertStateNoData || state == alertStateError) &&
+		alertStateMatches(state, opts.StateFilter) && matcherCount == 0 {
+		return true
+	}
+
 	return opts.ShowInactiveAlerts &&
-		normalizeAlertState(rule.State) == alertStateNormal &&
-		alertStateMatches(rule.State, opts.StateFilter) &&
+		state == alertStateNormal &&
+		alertStateMatches(state, opts.StateFilter) &&
 		matcherCount == 0
 }
 
