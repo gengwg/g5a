@@ -20,6 +20,15 @@ func ResolveVariables(
 	variables []TemplateVariable,
 	overrides map[string]string,
 ) string {
+	return resolveVariables(expr, variables, overrides, 0)
+}
+
+func resolveVariables(
+	expr string,
+	variables []TemplateVariable,
+	overrides map[string]string,
+	depth int,
+) string {
 	variableMap := make(map[string]TemplateVariable, len(variables))
 	for _, variable := range variables {
 		variableMap[variable.Name] = variable
@@ -37,7 +46,7 @@ func ResolveVariables(
 			override = overrides[name]
 		}
 
-		return formatVariableValue(variable, override, format)
+		return formatVariableValue(variable, override, format, variables, overrides, depth)
 	})
 }
 
@@ -58,17 +67,23 @@ func formatVariableValue(
 	variable TemplateVariable,
 	override string,
 	format string,
+	variables []TemplateVariable,
+	overrides map[string]string,
+	depth int,
 ) string {
 	values, customAll := variableValues(variable, override)
 	if customAll {
-		return variable.AllValue
+		if depth >= 3 {
+			return variable.AllValue
+		}
+
+		return resolveVariables(variable.AllValue, variables, overrides, depth+1)
+	}
+	if len(values) == 1 && values[0] == grafanaAllToken {
+		values = realVariableOptions(variable)
 	}
 	if len(values) == 0 {
 		return ""
-	}
-
-	if len(values) == 1 && values[0] == grafanaAllToken {
-		return ".*"
 	}
 
 	switch format {
@@ -142,6 +157,17 @@ func variableValues(
 	}
 
 	return []string{text}, false
+}
+
+func realVariableOptions(variable TemplateVariable) []string {
+	values := make([]string, 0, len(variable.Options))
+	for _, option := range variable.Options {
+		if option.Value != "" && option.Value != grafanaAllToken {
+			values = append(values, option.Value)
+		}
+	}
+
+	return values
 }
 
 func splitVariableValues(value string) []string {

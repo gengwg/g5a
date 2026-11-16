@@ -245,12 +245,24 @@ func expandedGroupHeight(group panelExpansionGroup, instances []PanelInstance) i
 	return max(group.height, bottom-group.baseY)
 }
 
+func withoutAllToken(options []string) []string {
+	values := make([]string, 0, len(options))
+	for _, value := range options {
+		if value != grafanaAllToken {
+			values = append(values, value)
+		}
+	}
+
+	return values
+}
+
 // RepeatValues returns the concrete values for a repeated panel variable.
 func RepeatValues(
 	variable TemplateVariable,
 	options []string,
 	selected string,
 ) []string {
+	options = withoutAllToken(options)
 	if isAllSelection(variable, selected) {
 		return append([]string(nil), options...)
 	}

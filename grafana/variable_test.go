@@ -155,10 +155,36 @@ func TestResolveVariables_All(t *testing.T) {
 		Current: grafana.TemplateVariableCurrent{
 			Value: json.RawMessage(`"$__all"`),
 		},
+		Options: []grafana.TemplateVariableOption{
+			{Text: "All", Value: "$__all"},
+			{Text: "alpha", Value: "alpha"},
+			{Text: "beta", Value: "beta"},
+		},
 	}}
 
 	got := grafana.ResolveVariables(`up{cluster=~"$cluster"}`, variables, nil)
-	want := `up{cluster=~".*"}`
+	want := `up{cluster=~"alpha|beta"}`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveVariables_CustomAllValue(t *testing.T) {
+	t.Parallel()
+
+	variables := []grafana.TemplateVariable{
+		{
+			Name: "cluster", Type: "query", Multi: true, IncludeAll: true, AllValue: "$env",
+			Current: grafana.TemplateVariableCurrent{Value: json.RawMessage(`"$__all"`)},
+		},
+		{
+			Name: "env", Type: "query",
+			Current: grafana.TemplateVariableCurrent{Value: json.RawMessage(`"prod"`)},
+		},
+	}
+
+	got := grafana.ResolveVariables(`up{cluster=~"$cluster"}`, variables, nil)
+	want := `up{cluster=~"prod"}`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
