@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gengwg/g5a/grafana"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveVariableOptions_QueryResult(t *testing.T) {
@@ -249,6 +251,107 @@ func TestResolveVariableOptions_LabelValuesQueries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveVariableOptionsRespectRefreshMode(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/v1/label/") {
+			requests++
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":["dev"]}`))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	newVariable := func(refresh int) grafana.TemplateVariable {
+		return grafana.TemplateVariable{
+			Name: "cluster", Type: "query", Refresh: refresh,
+			Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+			Current:    grafana.TemplateVariableCurrent{Value: json.RawMessage(`"prod"`)},
+			Options:    []grafana.TemplateVariableOption{{Text: "prod", Value: "prod"}, {Text: "dev", Value: "dev"}},
+			Definition: "label_values(up, cluster)",
+		}
+	}
+
+	options, defaults, err := client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		t.Context(), []grafana.TemplateVariable{newVariable(0)}, grafana.TimeRange{From: "now-1h", To: "now"}, nil, true,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"prod", "dev"}, options["cluster"])
+	assert.Equal(t, "prod", defaults["cluster"])
+	assert.Equal(t, 0, requests)
+
+	_, _, err = client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		t.Context(), []grafana.TemplateVariable{newVariable(1)}, grafana.TimeRange{From: "now-1h", To: "now"}, nil, true,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, requests)
+	_, _, err = client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		t.Context(), []grafana.TemplateVariable{newVariable(1)}, grafana.TimeRange{From: "now-1h", To: "now"}, nil, false,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, requests)
+
+	_, _, err = client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		t.Context(), []grafana.TemplateVariable{newVariable(2)}, grafana.TimeRange{From: "now-1h", To: "now"}, nil, true,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, requests)
+	_, _, err = client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		t.Context(), []grafana.TemplateVariable{newVariable(2)}, grafana.TimeRange{From: "now-1h", To: "now"}, nil, false,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 3, requests)
+}
+
+func TestQueryLabelValuesIncludesTimeRange(t *testing.T) {
+	t.Parallel()
+
+	var start, end string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start = r.URL.Query().Get("start")
+		end = r.URL.Query().Get("end")
+		_, _ = w.Write([]byte(`{"status":"success","data":["alpha"]}`))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	variable := grafana.TemplateVariable{
+		Name: "cluster", Type: "query", Refresh: 1,
+		Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+		Definition: "label_values(up, cluster)",
+		Current:    grafana.TemplateVariableCurrent{Value: json.RawMessage(`"alpha"`)},
+	}
+	_, _, err = client.ResolveVariableOptionsWithTimeRange(
+		t.Context(), []grafana.TemplateVariable{variable}, grafana.TimeRange{From: "now-1h", To: "now"},
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, start)
+	assert.NotEmpty(t, end)
+	assert.NotEqual(t, start, end)
+}
+
+func TestQueryVariableFailureIsReturned(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	variable := grafana.TemplateVariable{
+		Name: "cluster", Type: "query", Refresh: 1,
+		Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+		Definition: "label_values(up, cluster)",
+	}
+	_, _, err = client.ResolveVariableOptionsWithTimeRange(
+		t.Context(), []grafana.TemplateVariable{variable}, grafana.TimeRange{From: "now-1h", To: "now"},
+	)
+	assert.Error(t, err)
 }
 
 func TestResolveVariableOptions_RoundedTimeRange(t *testing.T) {

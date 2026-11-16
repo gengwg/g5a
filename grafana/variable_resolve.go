@@ -55,13 +55,38 @@ func (c *Client) ResolveVariableOptionsWithTimeRange(
 
 // ResolveVariableOptionsWithSelections resolves variables in dashboard order,
 // using current selections for dependent queries when supplied.
-//
-//nolint:cyclop // variable types and selection handling share one ordered pipeline
+func shouldFetchQueryVariable(variable TemplateVariable, initialLoad bool) bool {
+	if initialLoad && len(variable.Options) == 0 {
+		return true
+	}
+	if initialLoad {
+		return variable.Refresh != 0
+	}
+
+	return variable.Refresh == 2
+}
+
 func (c *Client) ResolveVariableOptionsWithSelections(
 	ctx context.Context,
 	variables []TemplateVariable,
 	timeRange TimeRange,
 	selections map[string]string,
+) (map[string][]string, map[string]string, error) {
+	return c.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		ctx, variables, timeRange, selections, true,
+	)
+}
+
+// ResolveVariableOptionsWithSelectionsAndInitialLoad resolves variables and
+// distinguishes initial dashboard loading from a later time-range change.
+//
+//nolint:cyclop // variable types and selection handling share one ordered pipeline
+func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
+	ctx context.Context,
+	variables []TemplateVariable,
+	timeRange TimeRange,
+	selections map[string]string,
+	initialLoad bool,
 ) (map[string][]string, map[string]string, error) {
 	options := make(map[string][]string, len(variables))
 	defaults := make(map[string]string, len(variables))
@@ -86,6 +111,10 @@ func (c *Client) ResolveVariableOptionsWithSelections(
 			opts = datasourceVariableOptions(variable, datasources)
 			current = resolveDatasourceSelection(current, datasources)
 		case "query":
+			if !shouldFetchQueryVariable(variable, initialLoad) {
+				opts = parseCustomVariableOptions(variable)
+				break
+			}
 			fetched, err := c.fetchQueryVariableOptions(
 				ctx,
 				variable,
@@ -94,16 +123,9 @@ func (c *Client) ResolveVariableOptionsWithSelections(
 				timeRange,
 			)
 			if err != nil {
-				if errors.Is(err, errUnsupportedTimeRange) {
-					return nil, nil, err
-				}
-				slog.Warn("failed to resolve dashboard variable",
-					"variable", variable.Name,
-					"error", err,
-				)
-			} else {
-				opts = fetched
+				return nil, nil, fmt.Errorf("resolving variable %s: %w", variable.Name, err)
 			}
+			opts = fetched
 		default:
 			opts = parseCustomVariableOptions(variable)
 		}
@@ -249,7 +271,7 @@ func (c *Client) fetchQueryVariableOptions(
 	}
 
 	if metric, label, ok := parseLabelValuesQuery(query); ok {
-		values, err := c.queryLabelValues(ctx, datasourceUID, label, metric)
+		values, err := c.queryLabelValues(ctx, datasourceUID, label, metric, fromMs, toMs)
 		if err != nil {
 			return nil, err
 		}
@@ -410,12 +432,18 @@ func (c *Client) queryLabelValues(
 	datasourceUID string,
 	label string,
 	metric string,
+	fromMs int64,
+	toMs int64,
 ) ([]string, error) {
 	path := "/api/datasources/proxy/uid/" + url.PathEscape(datasourceUID) +
 		"/api/v1/label/" + url.PathEscape(label) + "/values"
+	params := url.Values{}
 	if metric != "" {
-		path += "?match[]=" + url.QueryEscape(metric)
+		params.Set("match[]", metric)
 	}
+	params.Set("start", strconv.FormatInt(fromMs/1000, 10))
+	params.Set("end", strconv.FormatInt(toMs/1000, 10))
+	path += "?" + params.Encode()
 
 	var result promLabelValuesResult
 	if err := c.doJSON(ctx, path, &result); err != nil {

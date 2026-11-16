@@ -697,7 +697,7 @@ func dependentVariableDashboard(t *testing.T) *grafana.Dashboard {
 		"templating":{"list":[
 			{"name":"env","type":"custom","query":"prod,dev","current":{"value":"prod"}},
 			{"name":"instance","type":"query","datasource":{"uid":"prom1","type":"prometheus"},
-				"query":"query_result(up{env=\"$env\"})","current":{"value":"prod-a"}}
+				"query":"query_result(up{env=\"$env\"})","current":{"value":"prod-a"},"refresh":1}
 		]},
 		"panels":[{
 			"id":1,"type":"stat","title":"$instance",

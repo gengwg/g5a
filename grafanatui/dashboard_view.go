@@ -262,11 +262,12 @@ func (d *dashboardView) resolveVariables() tea.Cmd {
 	selections := cloneVariableValues(d.variableValues)
 
 	return func() tea.Msg {
-		options, defaults, err := client.ResolveVariableOptionsWithSelections(
+		options, defaults, err := client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
 			contextBackground(),
 			variables,
 			timeRange,
 			selections,
+			generation == 1,
 		)
 		if err != nil {
 			return variablesResolveErrorMsg{err: err, generation: generation}
@@ -635,6 +636,9 @@ func dashboardRefreshInterval(value string) time.Duration {
 }
 
 func cloneVariableValues(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
 	clone := make(map[string]string, len(values))
 	maps.Copy(clone, values)
 
