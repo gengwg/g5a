@@ -39,8 +39,10 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 
 - Classic `gridPos` layout on a 24-column grid.
 - Horizontal and vertical panel repeats with scoped variable values.
-- `repeatDirection` and `maxPerRow`.
-- Row repeats are not yet implemented. Schema v2 GridLayout, RowsLayout, AutoGrid, stacked Tabs, and library panels are supported.
+- Row repeats with scoped variable values, including repeated panels within repeated rows.
+- `repeatDirection` and `maxPerRow` for panel repeats.
+- Schema v2 GridLayout, RowsLayout, AutoGrid, stacked Tabs, and library panels are supported.
+- Nested RowsLayout levels that both define repeats return an explicit error; one repeating level is supported.
 - Narrow terminals reduce repeated-panel columns and scroll vertically.
 
 ## Panel types

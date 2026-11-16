@@ -287,7 +287,7 @@ func TestGetDashboardV2RowsLayoutOffsetsRows(t *testing.T) {
 				"title":"Rows",
 				"elements":{
 					"panel-1":{"kind":"Panel","spec":{
-						"id":1,"title":"One",
+						"id":1,"title":"$cluster",
 						"vizConfig":{"group":"stat","spec":{}},
 						"data":{"spec":{"queries":[]}}
 					}},
@@ -299,6 +299,7 @@ func TestGetDashboardV2RowsLayoutOffsetsRows(t *testing.T) {
 				},
 				"layout":{"kind":"RowsLayout","spec":{"rows":[
 					{"kind":"RowsLayoutRow","spec":{
+						"repeat":{"mode":"variable","value":"cluster"},
 						"layout":{"kind":"GridLayout","spec":{"items":[
 							{"kind":"GridLayoutItem","spec":{
 								"x":0,"y":0,"width":12,"height":4,
@@ -326,6 +327,141 @@ func TestGetDashboardV2RowsLayoutOffsetsRows(t *testing.T) {
 	require.Len(t, dashboard.Panels, 2)
 	assert.Equal(t, 0, dashboard.Panels[0].GridPos.Y)
 	assert.Equal(t, 5, dashboard.Panels[1].GridPos.Y)
+
+	variables := make([]grafana.TemplateVariable, 1)
+	variables[0].Name = "cluster"
+	variables[0].Multi = true
+	variables[0].IncludeAll = true
+	instances := grafana.ExpandPanels(
+		dashboard.Panels,
+		variables,
+		map[string][]string{"cluster": {"a", "b"}},
+		map[string]string{"cluster": "$__all"},
+	)
+	require.Len(t, instances, 3)
+	assert.Equal(t, "a", instances[0].Panel.Title)
+	assert.Equal(t, "b", instances[1].Panel.Title)
+	assert.Equal(t, "Two", instances[2].Panel.Title)
+	assert.Equal(t, 0, instances[0].Panel.GridPos.Y)
+	assert.Equal(t, 5, instances[1].Panel.GridPos.Y)
+	assert.Equal(t, 10, instances[2].Panel.GridPos.Y)
+	assert.NotEqual(t, instances[0].Key, instances[1].Key)
+}
+
+func TestGetDashboardV2NestedRowRepeats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		outerRepeat string
+		innerRepeat string
+		wantY       []int
+		wantError   bool
+	}{
+		{
+			name: "inner", innerRepeat: `"repeat":{"mode":"variable","value":"cluster"},`,
+			outerRepeat: "", wantY: []int{0, 5}, wantError: false,
+		},
+		{
+			name: "outer", outerRepeat: `"repeat":{"mode":"variable","value":"cluster"},`,
+			innerRepeat: "", wantY: []int{0, 6}, wantError: false,
+		},
+		{
+			name: "multiple levels rejected", wantError: true,
+			outerRepeat: `"repeat":{"mode":"variable","value":"cluster"},`,
+			innerRepeat: `"repeat":{"mode":"variable","value":"cluster"},`,
+			wantY:       nil,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			resource := fmt.Sprintf(`{
+				"spec":{
+					"title":"Nested rows",
+					"elements":{%s},
+					"layout":{"kind":"RowsLayout","spec":{"rows":[
+						{"kind":"RowsLayoutRow","spec":{
+							%s
+							"layout":{"kind":"RowsLayout","spec":{"rows":[
+								{"kind":"RowsLayoutRow","spec":{
+									%s
+									"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+								}}
+							]}}
+						}}
+					]}}
+				}
+			}`, v2TestElement(1), test.outerRepeat, test.innerRepeat, v2TestItem(1, "GridLayoutItem"))
+			server := newV2TestServer(resource)
+			defer server.Close()
+			client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			dashboard, err := client.GetDashboard(t.Context(), "demo")
+			if test.wantError {
+				require.ErrorContains(t, err, "nested dashboard v2 row repeats")
+				return
+			}
+			require.NoError(t, err)
+			instances := expandV2ClusterRows(dashboard)
+			require.Len(t, instances, len(test.wantY))
+			for index, wantY := range test.wantY {
+				assert.Equal(t, wantY, instances[index].Panel.GridPos.Y)
+			}
+		})
+	}
+}
+
+func TestGetDashboardV2RepeatedRowUsesAbsoluteTabOffset(t *testing.T) {
+	t.Parallel()
+
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Tab rows",
+			"elements":{%s},
+			"layout":{"kind":"TabsLayout","spec":{"tabs":[
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"First",
+					"layout":{"kind":"GridLayout","spec":{"items":[]}}
+				}},
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"Second",
+					"layout":{"kind":"RowsLayout","spec":{"rows":[
+						{"kind":"RowsLayoutRow","spec":{
+							"repeat":{"mode":"variable","value":"cluster"},
+							"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+						}}
+					]}}
+				}}
+			]}}
+		}
+	}`, v2TestElement(1), v2TestItem(1, "GridLayoutItem"))
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	instances := expandV2ClusterRows(dashboard)
+	require.Len(t, instances, 4)
+	assert.Equal(t, "First", instances[0].Panel.Title)
+	assert.Equal(t, "Second", instances[1].Panel.Title)
+	assert.Equal(t, 6, instances[2].Panel.GridPos.Y)
+	assert.Equal(t, 11, instances[3].Panel.GridPos.Y)
+}
+
+func expandV2ClusterRows(dashboard *grafana.Dashboard) []grafana.PanelInstance {
+	variables := make([]grafana.TemplateVariable, 1)
+	variables[0].Name = "cluster"
+	variables[0].Multi = true
+	variables[0].IncludeAll = true
+
+	return grafana.ExpandPanels(
+		dashboard.Panels,
+		variables,
+		map[string][]string{"cluster": {"a", "b"}},
+		map[string]string{"cluster": "$__all"},
+	)
 }
 
 func TestGetDashboardClassicDirectResource(t *testing.T) {

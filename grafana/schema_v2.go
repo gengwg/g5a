@@ -19,6 +19,7 @@ var (
 	errV2ElementNotFound    = errors.New("dashboard element not found")
 	errUnsupportedV2Element = errors.New("unsupported dashboard element kind")
 	errInvalidV2Query       = errors.New("invalid dashboard v2 query")
+	errNestedV2RowRepeat    = errors.New("nested dashboard v2 row repeats are not supported")
 )
 
 type dashboardV2Resource struct {
@@ -121,6 +122,9 @@ type dashboardV2LayoutItem struct {
 type dashboardV2LayoutRow struct {
 	Kind string `json:"kind"`
 	Spec struct {
+		Repeat *struct {
+			Value string `json:"value"`
+		} `json:"repeat"`
 		Layout dashboardV2Layout `json:"layout"`
 	} `json:"spec"`
 }
@@ -322,7 +326,7 @@ func (layout dashboardV2Layout) gridPanels(
 			FieldConfig: element.Spec.VizConfig.Spec.FieldConfig,
 			Options:     element.Spec.VizConfig.Spec.Options,
 			Targets:     nil, Datasource: nil, Panels: nil, Transformations: nil,
-			Repeat: "", RepeatDirection: "", MaxPerRow: 0,
+			Repeat: "", RepeatDirection: "", MaxPerRow: 0, Collapsed: false, row: nil,
 		}
 		if panel.ID == 0 {
 			panel.ID = ids.nextID()
@@ -390,11 +394,43 @@ func (layout dashboardV2Layout) rowsPanels(
 		if err != nil {
 			return nil, err
 		}
+		height := layoutHeight(row.Spec.Layout)
+		if len(rowPanels) > 0 {
+			rowGroup := &panelRow{
+				key: fmt.Sprintf("v2-row-%d", rowPanels[0].ID), repeat: "",
+				baseY: yOffset, height: height,
+			}
+			if row.Spec.Repeat != nil {
+				rowGroup.repeat = row.Spec.Repeat.Value
+			}
+			if err := assignRowGroup(rowPanels, rowGroup); err != nil {
+				return nil, err
+			}
+		}
 		panels = append(panels, rowPanels...)
-		yOffset += layoutHeight(row.Spec.Layout)
+		yOffset += height
 	}
 
 	return panels, nil
+}
+
+func assignRowGroup(panels []Panel, group *panelRow) error {
+	for index := range panels {
+		inner := panels[index].row
+		switch {
+		case inner == nil:
+			panels[index].row = group
+		case group.repeat == "":
+			// Preserve a nested row's identity when this row only supplies an offset.
+		case inner.repeat != "":
+			return fmt.Errorf("%w: %s", errNestedV2RowRepeat, inner.repeat)
+		default:
+			// A repeating outer row repeats the entire nested, non-repeating layout.
+			panels[index].row = group
+		}
+	}
+
+	return nil
 }
 
 func (layout dashboardV2Layout) panelsAtOffset(
@@ -406,8 +442,14 @@ func (layout dashboardV2Layout) panelsAtOffset(
 	if err != nil {
 		return nil, err
 	}
+	offsetRows := make(map[*panelRow]bool)
 	for index := range panels {
 		panels[index].GridPos.Y += yOffset
+		row := panels[index].row
+		if row != nil && !offsetRows[row] {
+			row.baseY += yOffset
+			offsetRows[row] = true
+		}
 	}
 
 	return panels, nil
@@ -485,7 +527,7 @@ func (layout dashboardV2Layout) tabsPanels(
 			GridPos:     GridPos{H: 2, W: dashboardV2GridColumns, X: 0, Y: yOffset},
 			FieldConfig: nil,
 			Options:     mustMarshal(map[string]string{"content": "## " + title}),
-			Panels:      nil, Transformations: nil, Repeat: "", RepeatDirection: "", MaxPerRow: 0,
+			Panels:      nil, Transformations: nil, Repeat: "", RepeatDirection: "", MaxPerRow: 0, Collapsed: false, row: nil,
 		})
 		tabPanels, err := tab.Spec.Layout.panelsAtOffset(elements, yOffset+2, ids)
 		if err != nil {

@@ -75,6 +75,15 @@ type Panel struct {
 	Repeat          string           `json:"repeat,omitempty"`
 	RepeatDirection string           `json:"repeatDirection,omitempty"`
 	MaxPerRow       int              `json:"maxPerRow,omitempty"`
+	Collapsed       bool             `json:"collapsed,omitempty"`
+	row             *panelRow
+}
+
+type panelRow struct {
+	key    string
+	repeat string
+	baseY  int
+	height int
 }
 
 // Transformation represents a single panel data transformation.
@@ -283,11 +292,40 @@ var skipPanelTypes = map[string]bool{ //nolint:gochecknoglobals // read-only set
 // that contain nested sub-panels. Non-data panels (text, dashlist,
 // etc.) are skipped.
 func FlattenPanels(panels []Panel) []Panel {
+	rowCounter := 0
+	result := flattenPanels(panels, nil, &rowCounter)
+	for _, panel := range result {
+		if panel.row == nil {
+			continue
+		}
+		panel.row.height = max(
+			panel.row.height,
+			panel.GridPos.Y+panel.GridPos.H-panel.row.baseY,
+		)
+	}
+
+	return result
+}
+
+func flattenPanels(panels []Panel, inherited *panelRow, counter *int) []Panel {
 	var result []Panel
+	activeRow := inherited
 
 	for _, panel := range panels {
 		if panel.Type == "row" {
-			result = append(result, FlattenPanels(panel.Panels)...)
+			*counter++
+			row := &panelRow{
+				key:    fmt.Sprintf("row-%d-%d", *counter, panel.ID),
+				repeat: panel.Repeat,
+				baseY:  panel.GridPos.Y,
+				height: max(panel.GridPos.H, 1),
+			}
+			result = append(result, flattenPanels(panel.Panels, row, counter)...)
+			if panel.Collapsed {
+				activeRow = inherited
+			} else {
+				activeRow = row
+			}
 			continue
 		}
 
@@ -295,6 +333,9 @@ func FlattenPanels(panels []Panel) []Panel {
 			continue
 		}
 
+		if activeRow != nil {
+			panel.row = activeRow
+		}
 		result = append(result, panel)
 	}
 
