@@ -3,7 +3,7 @@ name: release
 on:
   push:
     tags:
-      - v*
+      - g5a-v*
 
 permissions:
   contents: write
@@ -21,14 +21,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: 'go.mod'
+          go-version-file: go.mod
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+      - name: Build release archives
+        run: ./scripts/build-release.sh "${GITHUB_REF_NAME}"
+
+      - name: Create GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/*.tar.gz dist/*.zip dist/checksums.txt \
+            --verify-tag \
+            --title "g5a ${GITHUB_REF_NAME#g5a-}" \
+            --generate-notes
