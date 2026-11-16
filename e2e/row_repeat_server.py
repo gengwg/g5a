@@ -289,6 +289,7 @@ def refresh_dashboard(refresh):
 
 REFRESH_NEVER_DASHBOARD = refresh_dashboard(0)
 REFRESH_LOAD_DASHBOARD = refresh_dashboard(1)
+REFRESH_LOAD_DASHBOARD["templating"]["list"][0]["options"] = []
 
 
 INTERVAL_DASHBOARD = {

@@ -74,21 +74,34 @@ func (c *Client) ResolveVariableOptionsWithSelections(
 	timeRange TimeRange,
 	selections map[string]string,
 ) (map[string][]string, map[string]string, error) {
-	return c.ResolveVariableOptionsWithSelectionsAndInitialLoad(
-		ctx, variables, timeRange, selections, true,
+	return c.ResolveVariableOptionsWithState(
+		ctx, variables, timeRange, selections, true, nil,
 	)
 }
 
 // ResolveVariableOptionsWithSelectionsAndInitialLoad resolves variables and
 // distinguishes initial dashboard loading from a later time-range change.
-//
-//nolint:cyclop // variable types and selection handling share one ordered pipeline
 func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
 	ctx context.Context,
 	variables []TemplateVariable,
 	timeRange TimeRange,
 	selections map[string]string,
 	initialLoad bool,
+) (map[string][]string, map[string]string, error) {
+	return c.ResolveVariableOptionsWithState(ctx, variables, timeRange, selections, initialLoad, nil)
+}
+
+// ResolveVariableOptionsWithState resolves variables and preserves option
+// lists fetched earlier in the dashboard session.
+//
+//nolint:cyclop // variable types and selection handling share one ordered pipeline
+func (c *Client) ResolveVariableOptionsWithState(
+	ctx context.Context,
+	variables []TemplateVariable,
+	timeRange TimeRange,
+	selections map[string]string,
+	initialLoad bool,
+	previousOptions map[string][]string,
 ) (map[string][]string, map[string]string, error) {
 	options := make(map[string][]string, len(variables))
 	defaults := make(map[string]string, len(variables))
@@ -117,8 +130,14 @@ func (c *Client) ResolveVariableOptionsWithSelectionsAndInitialLoad(
 			opts = intervalVariableOptions(variable)
 		case "query":
 			if !shouldFetchQueryVariable(variable, initialLoad) {
-				opts = parseCustomVariableOptions(variable)
-				break
+				if previous, ok := previousOptions[variable.Name]; ok {
+					opts = append([]string(nil), previous...)
+					break
+				}
+				if len(variable.Options) > 0 {
+					opts = parseCustomVariableOptions(variable)
+					break
+				}
 			}
 			fetched, err := c.fetchQueryVariableOptions(
 				ctx,

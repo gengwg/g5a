@@ -113,6 +113,13 @@ try:
     assert label_request["start"] and label_request["end"]
     print("variable refresh mode and label_values time range: OK")
 
+    run_tui("http://127.0.0.1:18082/d/refreshload", "/tmp/opencode/refresh-time-change-repro.txt", keys="tkk\r")
+    with open(artifact("last-queries.jsonl")) as capture:
+        requests = [json.loads(line) for line in capture]
+    assert all("label_values(" not in query.get("expr", "") for request in requests for query in request["queries"])
+    assert any(query.get("expr") == "dev" for request in requests for query in request["queries"])
+    print("time change preserves resolved variable options: OK")
+
     run_tui("http://127.0.0.1:18082/d/intervals", "intervals-repro.txt")
     with open(artifact("last-queries.jsonl")) as capture:
         requests = [json.loads(line) for line in capture]

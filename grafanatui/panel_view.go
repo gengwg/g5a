@@ -224,14 +224,16 @@ func (p *panelView) resolveVariables() tea.Cmd {
 		selections = p.initialVariables
 	}
 	selections = cloneVariableValues(selections)
+	previousOptions := cloneVariableOptions(p.variableOptions)
 
 	return func() tea.Msg {
-		options, defaults, err := client.ResolveVariableOptionsWithSelectionsAndInitialLoad(
+		options, defaults, err := client.ResolveVariableOptionsWithState(
 			contextBackground(),
 			variables,
 			timeRange,
 			selections,
 			generation == 1,
+			previousOptions,
 		)
 		if err != nil {
 			return variablesResolveErrorMsg{err: err, generation: generation}

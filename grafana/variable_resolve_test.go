@@ -401,6 +401,48 @@ func TestResolveVariableOptionsRespectRefreshMode(t *testing.T) {
 	assert.Equal(t, 3, requests)
 }
 
+func TestResolveVariableOptionsWithStatePreservesPreviousOptions(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/v1/label/") {
+			requests++
+		}
+		if r.URL.Path == "/api/datasources" {
+			_, _ = w.Write([]byte(`[{"uid":"prom1","name":"Prometheus","type":"prometheus"}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":["alpha","beta"]}`))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	variable := grafana.TemplateVariable{
+		Name: "cluster", Type: "query", Refresh: 1, Multi: true, IncludeAll: true,
+		Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+		Current:    grafana.TemplateVariableCurrent{Value: json.RawMessage(`"$__all"`)},
+		Definition: "label_values(up, cluster)",
+	}
+	previous := map[string][]string{"cluster": {"alpha", "beta"}}
+	options, defaults, err := client.ResolveVariableOptionsWithState(
+		t.Context(), []grafana.TemplateVariable{variable},
+		grafana.TimeRange{From: "now-1h", To: "now"}, nil, false, previous,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "beta"}, options["cluster"])
+	assert.Equal(t, "$__all", defaults["cluster"])
+	assert.Equal(t, 0, requests)
+
+	options, _, err = client.ResolveVariableOptionsWithState(
+		t.Context(), []grafana.TemplateVariable{variable},
+		grafana.TimeRange{From: "now-1h", To: "now"}, nil, false, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "beta"}, options["cluster"])
+	assert.Equal(t, 1, requests)
+}
+
 func TestQueryLabelValuesIncludesTimeRange(t *testing.T) {
 	t.Parallel()
 
