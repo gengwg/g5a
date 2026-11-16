@@ -62,8 +62,13 @@ func TestFormatValue(t *testing.T) {
 		{name: "none integer", value: 42, unit: "none", expected: "42"},
 		{name: "none float", value: 42.56, unit: "none", expected: "42.56"},
 
-		// unknown unit
-		{name: "unknown unit", value: 123, unit: "foobar", expected: "123"},
+		// custom units
+		{name: "custom literal unit", value: 123, unit: "foobar", expected: "123 foobar"},
+		{name: "custom suffix", value: 52, unit: "suffix: GPU-h", expected: "52 GPU-h"},
+		{name: "custom prefix", value: 52, unit: "prefix:$", expected: "$52"},
+		{name: "custom count", value: 52, unit: "count:requests", expected: "52 requests"},
+		{name: "scaled custom count", value: 1500, unit: "count:requests", expected: "1.5K requests"},
+		{name: "plain GPU hours", value: 52, unit: "GPU-h", expected: "52 GPU-h"},
 
 		// edge cases
 		{name: "zero", value: 0, unit: "short", expected: "0"},

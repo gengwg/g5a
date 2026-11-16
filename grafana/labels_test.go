@@ -160,6 +160,39 @@ func TestApplyTransformationsJoinMaterializesOnlyJoinLabel(t *testing.T) {
 	)
 }
 
+func TestApplyTransformationsOrganizePreservesAllLabelsBeforeValue(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number", Labels: map[string]string{
+					"cluster": "alpha", "product_name": "PowerEdge R6715", "system_vendor": "Dell Inc.",
+				}},
+			},
+			`[1000]`, `[5]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "organize",
+		Options: json.RawMessage(`{
+			"excludeByName":{"Time":true},
+			"renameByName":{"Value":"nodes","product_name":"model","system_vendor":"vendor"}
+		}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	require.Len(t, frame.Schema.Fields, 4)
+	wantNames := []string{"cluster", "model", "vendor", "nodes"}
+	wantValues := []string{`["alpha"]`, `["PowerEdge R6715"]`, `["Dell Inc."]`, `[5]`}
+	for index, wantName := range wantNames {
+		assert.Equal(t, wantName, frame.Schema.Fields[index].Name)
+		assert.JSONEq(t, wantValues[index], string(frame.Data.Values[index]))
+	}
+}
+
 func TestApplyTransformationsOrganizeRenameThenJoinLabel(t *testing.T) {
 	t.Parallel()
 

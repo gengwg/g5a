@@ -10,7 +10,10 @@ import (
 	"strconv"
 )
 
-const joinModeOuter = "outer"
+const (
+	joinModeOuter          = "outer"
+	transformationOrganize = "organize"
+)
 
 // ApplyTransformations applies a panel's transformations to its query
 // result, modifying data frames in place.
@@ -25,7 +28,7 @@ func ApplyTransformations(
 		switch t.ID {
 		case "filterFieldsByName":
 			applyFilterFieldsByName(result, t.Options)
-		case "organize":
+		case transformationOrganize:
 			applyOrganize(result, t.Options)
 		case "joinByField":
 			applyJoinByField(result, t.Options)

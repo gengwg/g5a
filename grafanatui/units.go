@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // SI magnitude thresholds and suffixes.
@@ -102,7 +103,39 @@ func formatValue(value float64, unit string, decimals *int) string {
 		return formatter(value, decimals)
 	}
 
-	return formatRawNumber(value, decimals)
+	return formatCustomUnit(value, unit, decimals)
+}
+
+func formatCustomUnit(value float64, unit string, decimals *int) string {
+	number := formatRawNumber(value, decimals)
+	switch {
+	case strings.HasPrefix(unit, "prefix:"):
+		return strings.TrimSpace(strings.TrimPrefix(unit, "prefix:")) + number
+	case strings.HasPrefix(unit, "suffix:"):
+		return number + " " + strings.TrimSpace(strings.TrimPrefix(unit, "suffix:"))
+	case strings.HasPrefix(unit, "count:"):
+		return formatCountUnit(value, strings.TrimSpace(strings.TrimPrefix(unit, "count:")), decimals)
+	case unit != "":
+		return number + " " + unit
+	default:
+		return number
+	}
+}
+
+func formatCountUnit(value float64, unit string, decimals *int) string {
+	suffix := " " + unit
+	switch absolute := math.Abs(value); {
+	case absolute >= 1e12:
+		return formatUnitNumber(value/1e12, "T"+suffix, decimals)
+	case absolute >= 1e9:
+		return formatUnitNumber(value/1e9, "B"+suffix, decimals)
+	case absolute >= 1e6:
+		return formatUnitNumber(value/1e6, "M"+suffix, decimals)
+	case absolute >= 1e3:
+		return formatUnitNumber(value/1e3, "K"+suffix, decimals)
+	default:
+		return formatRawNumber(value, decimals) + suffix
+	}
 }
 
 // formatSI formats a number with SI suffixes (K, M, G, T).

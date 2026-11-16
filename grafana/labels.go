@@ -12,12 +12,13 @@ func requiredLabelFields(
 	transformations []Transformation,
 ) map[string]bool {
 	candidates := labelFieldRules(transformations)
+	preserveAll := preserveLabelsForOrganize(transformations)
 	required := make(map[string]bool)
 	for _, data := range result.Results {
 		for _, frame := range data.Frames {
 			for _, field := range frame.Schema.Fields {
 				for name := range field.Labels {
-					if slices.Contains(candidates, name) {
+					if preserveAll || slices.Contains(candidates, name) {
 						required[name] = true
 					}
 				}
@@ -26,6 +27,16 @@ func requiredLabelFields(
 	}
 
 	return required
+}
+
+func preserveLabelsForOrganize(transformations []Transformation) bool {
+	for _, transformation := range transformations {
+		if transformation.ID == transformationOrganize {
+			return true
+		}
+	}
+
+	return false
 }
 
 func labelFieldRules(transformations []Transformation) []string {
@@ -82,7 +93,7 @@ func collectLabelReferences(transformation Transformation, required map[string]b
 				addLabelReference(required, conversion.TargetField)
 			}
 		}
-	case "organize":
+	case transformationOrganize:
 		collectOrganizeReferences(transformation.Options, required)
 	}
 }
@@ -207,8 +218,9 @@ func exactPatternConcat(expression *syntax.Regexp) (string, bool) {
 	return name.String(), true
 }
 
-// materializeLabelFields expands only labels needed by a transformation. Other
-// labels stay on their fields instead of becoming sparse table columns.
+// materializeLabelFields expands labels required by the transformation pipeline.
+// Organize preserves all labels; selective transformations keep unrelated labels
+// attached to their fields instead of creating sparse table columns.
 func materializeLabelFields(result *QueryResult, required map[string]bool) {
 	if len(required) == 0 {
 		return
@@ -243,9 +255,6 @@ func materializeFrameLabels(frame DataFrame, required map[string]bool) []DataFra
 			fields = append(fields, field)
 			values = append(values, baseValues[index])
 		}
-		fields = append(fields, labeledField)
-		values = append(values, baseValues[fieldIndex])
-
 		labelNames := make([]string, 0, len(required))
 		for name := range labeledField.Labels {
 			if required[name] {
@@ -254,10 +263,11 @@ func materializeFrameLabels(frame DataFrame, required map[string]bool) []DataFra
 		}
 		slices.Sort(labelNames)
 
-		existing := make(map[string]bool, len(fields))
+		existing := make(map[string]bool, len(fields)+1)
 		for _, field := range fields {
 			existing[field.Name] = true
 		}
+		existing[labeledField.Name] = true
 		rowCount := frameRowCount(&frame)
 		for _, name := range labelNames {
 			if existing[name] {
@@ -273,6 +283,8 @@ func materializeFrameLabels(frame DataFrame, required map[string]bool) []DataFra
 			})
 			values = append(values, mustMarshal(column))
 		}
+		fields = append(fields, labeledField)
+		values = append(values, baseValues[fieldIndex])
 
 		expanded = append(expanded, DataFrame{
 			Schema: DataFrameSchema{

@@ -52,7 +52,7 @@ First-class support for the current dashboard viewer:
 | Panel | Behavior |
 |-------|----------|
 | `stat` | Reductions, mappings, thresholds, units, labels, foreground/background colors |
-| `table` | Typed cells, time-aligned multi-series columns, sorting, mappings, thresholds, units, per-column overrides, truncation |
+| `table` | Typed cells, time-aligned multi-series columns, sorting, mappings, thresholds, units, per-column overrides, truncation, sum/count footers and row counts |
 | `timeseries` / legacy `graph` | Braille lines, duplicate-name handling, units, Last/Max and other basic legend calculations |
 | `alertlist` | Unified and legacy read APIs, Grafana and supported datasource-managed rules, list/stat views, custom label grouping, filters, sorting, max items, and instance labels |
 | `geomap` | Latitude/longitude points on an ASCII coordinate grid, aliases, names/labels, values, threshold colors, and exact point rows |
@@ -64,7 +64,7 @@ Text panels remain visible in navigation. Alert-list acknowledgement and other a
 ## Transformations
 
 - `joinByField` with outer joins across frames and refIDs, including joins on Prometheus labels.
-- Labels are expanded only when needed by `joinByField`, `groupingToMatrix`, or exact-name/literal-alternative field filters; unrelated labels remain attached to their fields instead of becoming sparse table columns.
+- `organize` preserves label fields in their original relative order before numeric values. Other transformations expand labels only when needed by `joinByField`, `groupingToMatrix`, or exact-name/literal-alternative field filters; unrelated labels remain attached to their fields instead of becoming sparse table columns.
 - `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and `emptyValue`.
 - `sortBy` with ordered field rules and numeric-aware stable sorting.
 - `merge` with field-name alignment and null padding for missing fields.
@@ -81,7 +81,7 @@ Unknown transformation IDs produce a visible warning in the affected panel. Othe
 
 - DataFrame `field.Config`, panel defaults, and ordered `byName` / `byRegexp` overrides.
 - Display names, compact datasource `displayNameFromDS` names (metric prefix or first label value), width-aware URL legends, and `${__field.labels.name}` interpolation.
-- Units, decimals, no-value text, min/max, and absolute/percentage thresholds.
+- Units, including literal, prefix, suffix, and scaled count custom units, decimals, no-value text, min/max, and absolute/percentage thresholds.
 - DataFrame time fields rendered as local timestamps.
 - Value, range, regex, null, and NaN mappings.
 - Mapping colors, threshold colors, and color-background cells.

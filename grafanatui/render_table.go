@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,36 @@ type tableOptions struct {
 		DisplayName string `json:"displayName"`
 		Desc        bool   `json:"desc"`
 	} `json:"sortBy"`
+	Footer tableFooterOptions `json:"footer"`
+}
+
+type tableFooterOptions struct {
+	Show      *bool             `json:"show"`
+	Reducer   []string          `json:"reducer"`
+	Fields    tableFooterFields `json:"fields"`
+	CountRows bool              `json:"countRows"`
+}
+
+type tableFooterFields []string
+
+func (f *tableFooterFields) UnmarshalJSON(data []byte) error {
+	var fields []string
+	if err := json.Unmarshal(data, &fields); err == nil {
+		*f = fields
+
+		return nil
+	}
+	var field string
+	if err := json.Unmarshal(data, &field); err != nil {
+		return fmt.Errorf("decoding table footer fields: %w", err)
+	}
+	if field == "" {
+		*f = nil
+	} else {
+		*f = []string{field}
+	}
+
+	return nil
 }
 
 type tableColumn struct {
@@ -73,12 +104,15 @@ func (r *tableRenderer) Render(
 
 	var options tableOptions
 	_ = json.Unmarshal(panel.Options, &options)
+	options.Footer = resolveTableFooter(options.Footer, panel.FieldConfig)
 	sortTableRows(rows, columns, options)
 
 	totalRowCount := len(rows)
 	visibleRows := rows[:min(len(rows), max(height, 0))]
 	presented := presentTableRows(visibleRows, columns, panel.FieldConfig)
-	colWidths := calculateColumnWidths(columns, presented, width)
+	footerRows := presentTableFooter(rows, columns, panel.FieldConfig, options.Footer)
+	widthRows := append(append([][]fieldPresentation{}, presented...), footerRows...)
+	colWidths := calculateColumnWidths(columns, widthRows, width)
 	lines := renderTableLines(
 		columns,
 		presented,
@@ -86,6 +120,7 @@ func (r *tableRenderer) Render(
 		height,
 		totalRowCount,
 		options.ShowHeader == nil || *options.ShowHeader,
+		footerRows,
 	)
 
 	return strings.Join(lines, "\n")
@@ -390,6 +425,135 @@ func presentTableRows(
 	return presented
 }
 
+func resolveTableFooter(
+	options tableFooterOptions,
+	fieldConfig json.RawMessage,
+) tableFooterOptions {
+	if options.Show != nil {
+		return options
+	}
+	var config struct {
+		Defaults struct {
+			Custom struct {
+				Footer struct {
+					Reducers []string `json:"reducers"`
+				} `json:"footer"`
+			} `json:"custom"`
+		} `json:"defaults"`
+	}
+	if err := json.Unmarshal(fieldConfig, &config); err != nil {
+		return options
+	}
+	if len(config.Defaults.Custom.Footer.Reducers) > 0 {
+		show := true
+		options.Show = &show
+		options.Reducer = config.Defaults.Custom.Footer.Reducers
+	}
+
+	return options
+}
+
+func presentTableFooter(
+	rows []tableRow,
+	columns []tableColumn,
+	fieldConfig json.RawMessage,
+	options tableFooterOptions,
+) [][]fieldPresentation {
+	if options.Show == nil || !*options.Show {
+		return nil
+	}
+	reducers := options.Reducer
+	if len(reducers) == 0 {
+		reducers = []string{calcSum}
+	}
+	footerRows := make([][]fieldPresentation, len(reducers))
+	for reducerIndex, reducer := range reducers {
+		cells := make([]fieldPresentation, len(columns))
+		for columnIndex, column := range columns {
+			cells[columnIndex] = presentFooterCell(
+				rows, column, columnIndex, reducer, reducerIndex, options, fieldConfig,
+			)
+		}
+		footerRows[reducerIndex] = cells
+	}
+
+	return footerRows
+}
+
+func footerCellLabel(
+	rows []tableRow,
+	column tableColumn,
+	columnIndex int,
+	reducer string,
+	reducerIndex int,
+	options tableFooterOptions,
+) string {
+	if columnIndex != 0 || column.field.Type == fieldTypeNumber {
+		return ""
+	}
+	if reducer == calcCount && options.CountRows {
+		return fmt.Sprintf("TOTAL %d", len(rows))
+	}
+	if reducer == calcSum && reducerIndex == 0 {
+		return "TOTAL"
+	}
+
+	return strings.ToUpper(reducer)
+}
+
+//nolint:exhaustruct // empty footer cells intentionally use zero-value presentation
+func presentFooterCell(
+	rows []tableRow,
+	column tableColumn,
+	columnIndex int,
+	reducer string,
+	reducerIndex int,
+	options tableFooterOptions,
+	fieldConfig json.RawMessage,
+) fieldPresentation {
+	cell := fieldPresentation{Text: footerCellLabel(
+		rows, column, columnIndex, reducer, reducerIndex, options,
+	)}
+	if reducer == calcCount && options.CountRows {
+		return cell
+	}
+	if column.field.Type != fieldTypeNumber ||
+		!footerIncludesField(column, options.Fields) {
+		return cell
+	}
+	values := make([]float64, 0, len(rows))
+	for _, row := range rows {
+		if number, ok := fieldNumber(row.values[columnIndex]); ok {
+			values = append(values, number)
+		}
+	}
+	switch reducer {
+	case calcSum:
+		return presentField(fieldConfig, column.field, reduceStatColumn(values, []string{calcSum}))
+	case calcCount:
+		cell.Text = strconv.Itoa(len(values))
+
+		return cell
+	default:
+		cell.Text = "unsupported"
+
+		return cell
+	}
+}
+
+func footerIncludesField(column tableColumn, fields []string) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	for _, name := range fields {
+		if column.field.Name == name || column.header == name {
+			return true
+		}
+	}
+
+	return false
+}
+
 func formatTableTime(value any, fallback string) string {
 	if value == nil {
 		return fallback
@@ -438,6 +602,16 @@ func calculateColumnWidths(
 	return widths
 }
 
+func tableDisplayCount(rowCount, totalRowCount, remainingHeight int) (int, bool) {
+	displayCount := min(rowCount, remainingHeight)
+	truncated := totalRowCount > remainingHeight
+	if truncated {
+		displayCount = min(rowCount, max(remainingHeight-1, 0))
+	}
+
+	return displayCount, truncated
+}
+
 //nolint:exhaustruct // presentation defaults are intentionally zero-valued
 func renderTableLines(
 	columns []tableColumn,
@@ -446,6 +620,7 @@ func renderTableLines(
 	maxHeight int,
 	totalRowCount int,
 	showHeader bool,
+	footerRows [][]fieldPresentation,
 ) []string {
 	lines := make([]string, 0, maxHeight)
 	if showHeader {
@@ -458,20 +633,22 @@ func renderTableLines(
 		lines = append(lines, buildTableSeparator(widths))
 	}
 
-	remainingHeight := maxHeight - len(lines)
-	if remainingHeight <= 0 {
-		return lines[:maxHeight]
+	if maxHeight <= len(lines) {
+		return lines[:min(maxHeight, len(lines))]
 	}
-	displayCount := min(len(rows), remainingHeight)
-	truncated := totalRowCount > remainingHeight
-	if truncated {
-		displayCount = min(len(rows), max(remainingHeight-1, 0))
-	}
+	remainingHeight := max(maxHeight-len(lines)-len(footerRows), 0)
+	displayCount, truncated := tableDisplayCount(len(rows), totalRowCount, remainingHeight)
 	for index := range displayCount {
 		lines = append(lines, formatTableRow(rows[index], widths, columns, false))
 	}
-	if truncated && len(lines) < maxHeight {
+	if truncated && remainingHeight > 0 && len(lines) < maxHeight-len(footerRows) {
 		lines = append(lines, fmt.Sprintf("... and %d more rows", totalRowCount-displayCount))
+	}
+	for _, footerRow := range footerRows {
+		if len(lines) >= maxHeight {
+			break
+		}
+		lines = append(lines, formatTableRow(footerRow, widths, columns, false))
 	}
 
 	return lines
