@@ -39,6 +39,17 @@ func preserveLabelsForOrganize(transformations []Transformation) bool {
 	return false
 }
 
+func splitsLabelsForJoin(transformations []Transformation) bool {
+	for _, transformation := range transformations {
+		if transformation.ID == transformationJoinByField ||
+			transformation.ID == transformationGroupingToMatrix {
+			return true
+		}
+	}
+
+	return false
+}
+
 func labelFieldRules(transformations []Transformation) []string {
 	required := make(map[string]bool)
 	for _, transformation := range slices.Backward(transformations) {
@@ -56,12 +67,12 @@ func labelFieldRules(transformations []Transformation) []string {
 //nolint:cyclop // field-reference discovery is dispatched by transformation type
 func collectLabelReferences(transformation Transformation, required map[string]bool) {
 	switch transformation.ID {
-	case "joinByField":
+	case transformationJoinByField:
 		var options joinByFieldOptions
 		if err := json.Unmarshal(transformation.Options, &options); err == nil {
 			addLabelReference(required, options.ByField)
 		}
-	case "groupingToMatrix":
+	case transformationGroupingToMatrix:
 		var options groupingToMatrixOptions
 		if err := json.Unmarshal(transformation.Options, &options); err == nil {
 			addLabelReference(required, options.RowField, options.ColumnField)
@@ -221,18 +232,91 @@ func exactPatternConcat(expression *syntax.Regexp) (string, bool) {
 // materializeLabelFields expands labels required by the transformation pipeline.
 // Organize preserves all labels; selective transformations keep unrelated labels
 // attached to their fields instead of creating sparse table columns.
-func materializeLabelFields(result *QueryResult, required map[string]bool) {
+func materializeLabelFields(result *QueryResult, required map[string]bool, unify bool) {
 	if len(required) == 0 {
 		return
 	}
 	for refID, data := range result.Results {
 		frames := make([]DataFrame, 0, len(data.Frames))
 		for _, frame := range data.Frames {
+			if unify {
+				frames = append(frames, materializeFrameLabelsUnified(frame, required))
+				continue
+			}
 			frames = append(frames, materializeFrameLabels(frame, required)...)
 		}
 		data.Frames = frames
 		result.Results[refID] = data
 	}
+}
+
+//nolint:cyclop // unified expansion preserves field and value ordering
+func materializeFrameLabelsUnified(frame DataFrame, required map[string]bool) DataFrame {
+	shared := sharedRequiredLabels(frame, required)
+	if len(shared) == 0 {
+		return frame
+	}
+	names := make([]string, 0, len(shared))
+	for name := range shared {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	baseFields := frame.Schema.Fields
+	baseValues := frame.Data.Values
+	fields := make([]DataFrameField, 0, len(baseFields)+len(names))
+	values := make([]json.RawMessage, 0, len(baseValues)+len(names))
+	for index, field := range baseFields {
+		if len(field.Labels) == 0 && index < len(baseValues) {
+			fields = append(fields, field)
+			values = append(values, baseValues[index])
+		}
+	}
+	rowCount := frameRowCount(&frame)
+	for _, name := range names {
+		column := make([]any, rowCount)
+		for row := range column {
+			column[row] = shared[name]
+		}
+		fields = append(fields, DataFrameField{Name: name, Type: fieldTypeString, Labels: nil, Config: nil})
+		values = append(values, mustMarshal(column))
+	}
+	for index, field := range baseFields {
+		if len(field.Labels) > 0 && index < len(baseValues) {
+			fields = append(fields, field)
+			values = append(values, baseValues[index])
+		}
+	}
+	frame.Schema.Fields = fields
+	frame.Data.Values = values
+
+	return frame
+}
+
+func sharedRequiredLabels(frame DataFrame, required map[string]bool) map[string]string {
+	shared := make(map[string]string)
+	first := true
+	for _, field := range frame.Schema.Fields {
+		if field.Type != fieldTypeNumber || len(field.Labels) == 0 {
+			continue
+		}
+		if first {
+			for name, value := range field.Labels {
+				if required[name] {
+					shared[name] = value
+				}
+			}
+			first = false
+			continue
+		}
+		for name, value := range shared {
+			if field.Labels[name] != value {
+				delete(shared, name)
+			}
+		}
+	}
+
+	return shared
 }
 
 //nolint:cyclop // wide-frame series expansion has several small layout cases

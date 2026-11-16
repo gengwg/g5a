@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	joinModeOuter          = "outer"
-	transformationOrganize = "organize"
+	joinModeOuter                  = "outer"
+	transformationOrganize         = "organize"
+	transformationJoinByField      = "joinByField"
+	transformationGroupingToMatrix = "groupingToMatrix"
 )
 
 // ApplyTransformations applies a panel's transformations to its query
@@ -23,14 +25,18 @@ func ApplyTransformations(
 	result *QueryResult,
 	transformations []Transformation,
 ) {
-	materializeLabelFields(result, requiredLabelFields(result, transformations))
+	materializeLabelFields(
+		result,
+		requiredLabelFields(result, transformations),
+		preserveLabelsForOrganize(transformations) && !splitsLabelsForJoin(transformations),
+	)
 	for _, t := range transformations {
 		switch t.ID {
 		case "filterFieldsByName":
 			applyFilterFieldsByName(result, t.Options)
 		case transformationOrganize:
 			applyOrganize(result, t.Options)
-		case "joinByField":
+		case transformationJoinByField:
 			applyJoinByField(result, t.Options)
 		case "filterByValue":
 			applyFilterByValue(result, t.Options)
@@ -40,7 +46,7 @@ func ApplyTransformations(
 			applyCalculateField(result, t.Options)
 		case "reduce":
 			applyReduce(result, t.Options)
-		case "groupingToMatrix":
+		case transformationGroupingToMatrix:
 			applyGroupingToMatrix(result, t.Options)
 		case "sortBy":
 			applySortBy(result, t.Options)

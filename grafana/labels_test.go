@@ -193,6 +193,35 @@ func TestApplyTransformationsOrganizePreservesAllLabelsBeforeValue(t *testing.T)
 	}
 }
 
+func TestApplyTransformationsOrganizeKeepsWideFrameFields(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "cpu", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+				{Name: "memory", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+			},
+			`[1000]`, `[1]`, `[2]`,
+		)}},
+	}}
+
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "organize", Options: json.RawMessage(`{"excludeByName":{"Time":true}}`),
+	}})
+	require.Len(t, result.Results["A"].Frames, 1)
+	frame := result.Results["A"].Frames[0]
+	require.Len(t, frame.Schema.Fields, 3)
+	assert.Equal(t, "cluster", frame.Schema.Fields[0].Name)
+	assert.Equal(t, "cpu", frame.Schema.Fields[1].Name)
+	assert.Equal(t, "memory", frame.Schema.Fields[2].Name)
+	assert.JSONEq(t, `["alpha"]`, string(frame.Data.Values[0]))
+	assert.JSONEq(t, `[1]`, string(frame.Data.Values[1]))
+	assert.JSONEq(t, `[2]`, string(frame.Data.Values[2]))
+}
+
 func TestApplyTransformationsOrganizeRenameThenJoinLabel(t *testing.T) {
 	t.Parallel()
 

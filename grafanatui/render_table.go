@@ -488,11 +488,14 @@ func footerCellLabel(
 	reducerIndex int,
 	options tableFooterOptions,
 ) string {
-	if columnIndex != 0 || column.field.Type == fieldTypeNumber {
+	if columnIndex != 0 {
 		return ""
 	}
 	if reducer == calcCount && options.CountRows {
 		return fmt.Sprintf("TOTAL %d", len(rows))
+	}
+	if column.field.Type == fieldTypeNumber {
+		return ""
 	}
 	if reducer == calcSum && reducerIndex == 0 {
 		return "TOTAL"
@@ -612,7 +615,31 @@ func tableDisplayCount(rowCount, totalRowCount, remainingHeight int) (int, bool)
 	return displayCount, truncated
 }
 
-//nolint:exhaustruct // presentation defaults are intentionally zero-valued
+//nolint:exhaustruct // header cells use presentation defaults
+func appendTableHeader(
+	lines []string,
+	columns []tableColumn,
+	widths []int,
+	maxHeight int,
+	showHeader bool,
+	footerHeight int,
+) []string {
+	if !showHeader || maxHeight == footerHeight {
+		return lines
+	}
+	headers := make([]fieldPresentation, len(columns))
+	for index, column := range columns {
+		headers[index] = fieldPresentation{Text: column.header}
+	}
+	header := formatTableRow(headers, widths, columns, true)
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(header))
+	if maxHeight > len(lines)+footerHeight {
+		lines = append(lines, buildTableSeparator(widths))
+	}
+
+	return lines
+}
+
 func renderTableLines(
 	columns []tableColumn,
 	rows [][]fieldPresentation,
@@ -623,15 +650,7 @@ func renderTableLines(
 	footerRows [][]fieldPresentation,
 ) []string {
 	lines := make([]string, 0, maxHeight)
-	if showHeader {
-		headers := make([]fieldPresentation, len(columns))
-		for index, column := range columns {
-			headers[index] = fieldPresentation{Text: column.header}
-		}
-		header := formatTableRow(headers, widths, columns, true)
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Render(header))
-		lines = append(lines, buildTableSeparator(widths))
-	}
+	lines = appendTableHeader(lines, columns, widths, maxHeight, showHeader, len(footerRows))
 
 	if maxHeight <= len(lines) {
 		return lines[:min(maxHeight, len(lines))]

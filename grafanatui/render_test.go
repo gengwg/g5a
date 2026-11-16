@@ -396,6 +396,30 @@ func TestTableRendererFooterAndCustomUnit(t *testing.T) {
 	if !strings.Contains(currentOutput, "TOTAL") {
 		t.Errorf("current field-config footer was ignored:\n%s", currentOutput)
 	}
+
+	frame := result.Results["A"].Frames[0]
+	frame.Schema.Fields[0], frame.Schema.Fields[1] = frame.Schema.Fields[1], frame.Schema.Fields[0]
+	frame.Data.Values[0], frame.Data.Values[1] = frame.Data.Values[1], frame.Data.Values[0]
+	result.Results["A"] = grafana.QueryResultData{Frames: []grafana.DataFrame{frame}}
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,"footer":{"show":true,"reducer":["count"],"countRows":true}
+	}`)
+	numericFirst := grafanatui.RendererForPanel("table").Render(result, panel, 100, 8, nil)
+	if !strings.Contains(numericFirst, "TOTAL 2") {
+		t.Errorf("numeric-first table lost its row count:\n%s", numericFirst)
+	}
+	frame.Schema.Fields[0], frame.Schema.Fields[1] = frame.Schema.Fields[1], frame.Schema.Fields[0]
+	frame.Data.Values[0], frame.Data.Values[1] = frame.Data.Values[1], frame.Data.Values[0]
+	result.Results["A"] = grafana.QueryResultData{Frames: []grafana.DataFrame{frame}}
+	panel.Options = json.RawMessage(`{
+		"showHeader":true,"footer":{"show":true,"reducer":["sum"],"fields":""}
+	}`)
+	for _, height := range []int{1, 2} {
+		constrained := grafanatui.RendererForPanel("table").Render(result, panel, 100, height, nil)
+		if !strings.Contains(constrained, "TOTAL") {
+			t.Errorf("height %d dropped the footer:\n%s", height, constrained)
+		}
+	}
 }
 
 func TestTableRenderer_NarrowColumnsRemainReadable(t *testing.T) {
