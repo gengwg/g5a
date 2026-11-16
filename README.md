@@ -25,7 +25,7 @@ Screenshots use public, synthetic, or redacted data. Private instance, cluster, 
 - Grafana `/api/ds/query` requests that preserve instant/range and datasource-specific target fields.
 - DataFrame joins, selective label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `sortBy`, `merge`, and binary, unary, cumulative, window, and row calculations.
 - Read-only alert-list panels with list/stat views, custom label grouping, current-state filters, folders, instance labels, and legacy API fallback.
-- Stat, table, time-series, bar, and basic latitude/longitude geomap rendering with compact datasource-generated names.
+- Stat, table, time-series, bar, and latitude/longitude or geohash geomap rendering with compact datasource-generated names.
 - Shared field mappings, thresholds, units, decimals, overrides, datasource display names, timestamp formatting, and no-value handling.
 - Bounded concurrent refresh, cancellation, stale-response protection, cached panel rendering, and per-panel errors.
 - Token and basic authentication, with no request or response bodies written to logs.

@@ -3,6 +3,7 @@ package grafanatui_test
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -62,6 +63,46 @@ func TestGeoMapRendererAliasesAndLabels(t *testing.T) {
 	output := grafanatui.RendererForPanel("geomap").Render(result, grafana.Panel{}, 80, 12, nil)
 	if !strings.Contains(output, "Reykjavik") {
 		t.Errorf("geomap does not contain label-derived site name:\n%s", output)
+	}
+}
+
+func TestGeoMapRendererGeoHash(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{{
+			Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{
+				{Name: "site", Type: "string"},
+				{Name: "geohash", Type: "string"},
+				{Name: "temperature", Type: "number"},
+			}},
+			Data: grafana.DataFrameData{Values: []json.RawMessage{
+				json.RawMessage(`["Copenhagen"]`),
+				json.RawMessage(`["u4pruydqqvj"]`),
+				json.RawMessage(`[20]`),
+			}},
+		}}},
+	}}
+
+	output := grafanatui.RendererForPanel("geomap").Render(result, grafana.Panel{}, 100, 12, nil)
+	pointRow := regexp.MustCompile(`Copenhagen\s+57\.6491\s+10\.4074\s+20`)
+	if !pointRow.MatchString(output) {
+		t.Errorf("geohash point row has incorrect coordinates or ordering:\n%s", output)
+	}
+}
+
+func TestGeoMapRendererRejectsInvalidGeoHash(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{{
+			Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{{Name: "geohash", Type: "string"}}},
+			Data:   grafana.DataFrameData{Values: []json.RawMessage{json.RawMessage(`["not-a-hash"]`)}},
+		}}},
+	}}
+	output := grafanatui.RendererForPanel("geomap").Render(result, grafana.Panel{}, 60, 5, nil)
+	if !strings.Contains(output, "no geospatial data") {
+		t.Errorf("invalid geohash was rendered as a point: %q", output)
 	}
 }
 

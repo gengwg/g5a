@@ -55,7 +55,7 @@ First-class support for the current dashboard viewer:
 | `table` | Typed cells, time-aligned multi-series columns, sorting, mappings, thresholds, units, per-column overrides, truncation, sum/count footers and row counts |
 | `timeseries` / legacy `graph` | Braille lines, duplicate-name handling, units, Last/Max and other basic legend calculations |
 | `alertlist` | Unified and legacy read APIs, Grafana and supported datasource-managed rules, list/stat views, custom label grouping, filters, sorting, max items, and instance labels |
-| `geomap` | Latitude/longitude points on an ASCII coordinate grid, aliases, names/labels, values, threshold colors, and exact point rows |
+| `geomap` | Latitude/longitude and geohash points on an ASCII coordinate grid, aliases, names/labels, values, threshold colors, and exact point rows |
 
 Existing best-effort renderers also cover `gauge`, `bargauge`, `barchart`, `heatmap`, `histogram`, `piechart`, `state-timeline`, `status-history`, `candlestick`, `trend`, and `logs`. Their Grafana option coverage is more limited.
 

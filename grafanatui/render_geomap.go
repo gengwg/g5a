@@ -147,7 +147,7 @@ func collectFrameGeoPoints(frame grafana.DataFrame, fieldConfig json.RawMessage)
 	latIndex := geoFieldIndex(frame.Schema.Fields, "latitude", "lat")
 	lonIndex := geoFieldIndex(frame.Schema.Fields, "longitude", "lon", "lng", "long")
 	if latIndex < 0 || lonIndex < 0 {
-		return nil
+		return collectFrameGeoHashPoints(frame, fieldConfig)
 	}
 	nameIndex := geoFieldIndex(frame.Schema.Fields, "name", "site", "location", "city", "label")
 	valueIndex := geoValueFieldIndex(frame.Schema.Fields, latIndex, lonIndex)
@@ -168,6 +168,73 @@ func collectFrameGeoPoints(frame grafana.DataFrame, fieldConfig json.RawMessage)
 	return points
 }
 
+func collectFrameGeoHashPoints(frame grafana.DataFrame, fieldConfig json.RawMessage) []geoPoint {
+	hashIndex := geoFieldIndex(frame.Schema.Fields, "geohash")
+	if hashIndex < 0 {
+		return nil
+	}
+	nameIndex := geoFieldIndex(frame.Schema.Fields, "name", "site", "location", "city", "label")
+	valueIndex := geoValueFieldIndex(frame.Schema.Fields, hashIndex, -1)
+	rows, err := tableRows(frame)
+	if err != nil {
+		return nil
+	}
+	points := make([]geoPoint, 0, len(rows))
+	for _, row := range rows {
+		hash, ok := row.values[hashIndex].(string)
+		if !ok {
+			continue
+		}
+		lat, lon, ok := decodeGeohash(hash)
+		if !ok {
+			continue
+		}
+		point, ok := geoPointAt(frame, row, lat, lon, nameIndex, valueIndex, fieldConfig)
+		if ok {
+			points = append(points, point)
+		}
+	}
+
+	return points
+}
+
+func decodeGeohash(hash string) (float64, float64, bool) {
+	const alphabet = "0123456789bcdefghjkmnpqrstuvwxyz"
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if hash == "" {
+		return 0, 0, false
+	}
+	latMin, latMax := -90.0, 90.0
+	lonMin, lonMax := -180.0, 180.0
+	longitude := true
+	for _, char := range hash {
+		value := strings.IndexRune(alphabet, char)
+		if value < 0 {
+			return 0, 0, false
+		}
+		for bit := 4; bit >= 0; bit-- {
+			set := value&(1<<bit) != 0
+			if longitude {
+				lonMin, lonMax = updateGeoRange(lonMin, lonMax, set)
+			} else {
+				latMin, latMax = updateGeoRange(latMin, latMax, set)
+			}
+			longitude = !longitude
+		}
+	}
+
+	return (latMin + latMax) / 2, (lonMin + lonMax) / 2, true
+}
+
+func updateGeoRange(minimum, maximum float64, upper bool) (float64, float64) {
+	middle := (minimum + maximum) / 2
+	if upper {
+		return middle, maximum
+	}
+
+	return minimum, middle
+}
+
 func validGeoCoordinates(lat, lon float64) bool {
 	return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
 }
@@ -183,7 +250,23 @@ func geoPointFromRow(
 ) (geoPoint, bool) {
 	lat, latOK := fieldNumber(row.values[latIndex])
 	lon, lonOK := fieldNumber(row.values[lonIndex])
-	if !latOK || !lonOK || !validGeoCoordinates(lat, lon) {
+	if !latOK || !lonOK {
+		return geoPoint{name: "", lat: 0, lon: 0, value: nil, text: "", color: "", marker: ""}, false
+	}
+
+	return geoPointAt(frame, row, lat, lon, nameIndex, valueIndex, fieldConfig)
+}
+
+func geoPointAt(
+	frame grafana.DataFrame,
+	row tableRow,
+	lat float64,
+	lon float64,
+	nameIndex int,
+	valueIndex int,
+	fieldConfig json.RawMessage,
+) (geoPoint, bool) {
+	if !validGeoCoordinates(lat, lon) {
 		return geoPoint{name: "", lat: 0, lon: 0, value: nil, text: "", color: "", marker: ""}, false
 	}
 	point := geoPoint{name: "point", lat: lat, lon: lon, value: nil, text: "", color: "", marker: "◆"}
