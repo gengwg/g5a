@@ -8,13 +8,27 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 const (
 	joinModeOuter                  = "outer"
 	transformationOrganize         = "organize"
 	transformationJoinByField      = "joinByField"
+	transformationFilterByValue    = "filterByValue"
 	transformationGroupingToMatrix = "groupingToMatrix"
+	valueConditionRegex            = "regex"
+	valueConditionEqual            = "equal"
+	valueConditionNotEqual         = "notEqual"
+	valueConditionBetween          = "between"
+	valueConditionGreater          = "greater"
+	valueConditionGreaterOrEqual   = "greaterOrEqual"
+	valueConditionLower            = "lower"
+	valueConditionLowerOrEqual     = "lowerOrEqual"
+	valueConditionSubstring        = "substring"
+	valueConditionNotSubstring     = "notSubstring"
+	valueConditionIsNull           = "isNull"
+	valueConditionIsNotNull        = "isNotNull"
 )
 
 // ApplyTransformations applies a panel's transformations to its query
@@ -38,7 +52,7 @@ func ApplyTransformations(
 			applyOrganize(result, t.Options)
 		case transformationJoinByField:
 			applyJoinByField(result, t.Options)
-		case "filterByValue":
+		case transformationFilterByValue:
 			applyFilterByValue(result, t.Options)
 		case "convertFieldType":
 			applyConvertFieldType(result, t.Options)
@@ -89,6 +103,8 @@ func applyJoinByField(result *QueryResult, raw json.RawMessage) {
 	}
 
 	if opts.Mode != "" && opts.Mode != joinModeOuter {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("joinByField mode %q is unsupported; frames left unjoined", opts.Mode))
 		slog.Debug("unsupported joinByField mode, skipping", "mode", opts.Mode)
 		return
 	}
@@ -640,6 +656,13 @@ type valueFilterConfig struct {
 	Options json.RawMessage `json:"options"`
 }
 
+type valueConditionOptions struct {
+	Value     any  `json:"value"`
+	From      any  `json:"from"`
+	To        any  `json:"to"`
+	Inclusive bool `json:"inclusive"`
+}
+
 func applyFilterByValue(result *QueryResult, raw json.RawMessage) {
 	var opts filterByValueOptions
 	if err := json.Unmarshal(raw, &opts); err != nil {
@@ -648,12 +671,46 @@ func applyFilterByValue(result *QueryResult, raw json.RawMessage) {
 		return
 	}
 
+	warnUnsupportedValueFilters(result, opts.Filters)
 	for refID, rd := range result.Results {
 		for i := range rd.Frames {
 			filterFrameRows(&rd.Frames[i], &opts)
 		}
 
 		result.Results[refID] = rd
+	}
+}
+
+func warnUnsupportedValueFilters(result *QueryResult, filters []valueFilterEntry) {
+	for _, filter := range filters {
+		if !supportedValueCondition(filter.Config.ID) {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("unsupported filterByValue condition %q", filter.Config.ID))
+			continue
+		}
+		if filter.Config.ID != valueConditionRegex {
+			continue
+		}
+		opts, ok := decodeConditionOptions(filter.Config.Options)
+		pattern, valid := valueOptionText(opts.Value)
+		if !ok || !valid {
+			result.Warnings = append(result.Warnings, "invalid filterByValue regex options")
+			continue
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("invalid filterByValue regex: %v", err))
+		}
+	}
+}
+
+func supportedValueCondition(id string) bool {
+	switch id {
+	case valueConditionGreater, valueConditionGreaterOrEqual, valueConditionLower, valueConditionLowerOrEqual,
+		valueConditionEqual, valueConditionNotEqual, valueConditionIsNull, valueConditionIsNotNull,
+		valueConditionRegex, valueConditionSubstring, valueConditionNotSubstring, valueConditionBetween:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -700,13 +757,11 @@ func evaluateRowFilters(
 	matchMode string,
 ) bool {
 	for _, f := range filters {
+		matched := false
 		fieldIdx := findFieldIndex(frame, f.FieldName)
-		if fieldIdx < 0 || fieldIdx >= len(columns) {
-			continue
+		if fieldIdx >= 0 && fieldIdx < len(columns) {
+			matched = evaluateCondition(frameValueAt(columns[fieldIdx], row), f.Config)
 		}
-
-		val := columns[fieldIdx][row]
-		matched := evaluateCondition(val, f.Config)
 
 		if matchMode == matchAll && !matched {
 			return false
@@ -723,56 +778,151 @@ func evaluateRowFilters(
 
 // evaluateCondition checks a single value against a filter condition.
 func evaluateCondition(val any, config valueFilterConfig) bool {
-	num, ok := toFloat64(val)
+	switch config.ID {
+	case valueConditionIsNull:
+		return val == nil
+	case valueConditionIsNotNull:
+		return val != nil
+	case valueConditionRegex:
+		return evaluateRegexCondition(val, config.Options)
+	case valueConditionSubstring, valueConditionNotSubstring:
+		return evaluateSubstringCondition(val, config)
+	case valueConditionBetween:
+		return evaluateBetweenCondition(val, config.Options)
+	case valueConditionEqual, valueConditionNotEqual:
+		opts, ok := decodeConditionOptions(config.Options)
+		if !ok {
+			return false
+		}
+		equal := filterValuesEqual(val, opts.Value)
+		if config.ID == valueConditionNotEqual {
+			return !equal
+		}
+		return equal
+	default:
+		return evaluateNumericCondition(val, config)
+	}
+}
+
+func evaluateRegexCondition(val any, raw json.RawMessage) bool {
+	if val == nil {
+		return false
+	}
+	opts, ok := decodeConditionOptions(raw)
+	pattern, valid := valueOptionText(opts.Value)
+	text, textOK := valueOptionText(val)
+	if !ok || !valid || !textOK {
+		return false
+	}
+	matched, err := regexp.MatchString(pattern, text)
+
+	return err == nil && matched
+}
+
+func evaluateSubstringCondition(val any, config valueFilterConfig) bool {
+	opts, ok := decodeConditionOptions(config.Options)
+	search, valid := valueOptionText(opts.Value)
+	if !ok || !valid {
+		return false
+	}
+	if config.ID == valueConditionSubstring && search == "" {
+		return true
+	}
+	text, stringValue := val.(string)
+	if !stringValue {
+		return false
+	}
+	contains := strings.Contains(strings.ToLower(text), strings.ToLower(search))
+	if config.ID == valueConditionSubstring {
+		return contains
+	}
+
+	return search != "" && text != "" && !contains
+}
+
+func evaluateBetweenCondition(val any, raw json.RawMessage) bool {
+	opts, ok := decodeConditionOptions(raw)
 	if !ok {
 		return false
 	}
+	number, numberOK := toFloat64(val)
+	from, fromOK := toFloat64(opts.From)
+	to, toOK := toFloat64(opts.To)
+	if !numberOK || !fromOK || !toOK {
+		return false
+	}
+	if opts.Inclusive {
+		return number >= from && number <= to
+	}
 
-	threshold := parseThreshold(config.Options)
+	return number > from && number < to
+}
+
+func evaluateNumericCondition(val any, config valueFilterConfig) bool {
+	opts, ok := decodeConditionOptions(config.Options)
+	if !ok {
+		return false
+	}
+	number, numberOK := toFloat64(val)
+	threshold, thresholdOK := toFloat64(opts.Value)
+	if !numberOK || !thresholdOK {
+		return false
+	}
 
 	switch config.ID {
-	case "greater":
-		return num > threshold
-	case "greaterOrEqual":
-		return num >= threshold
-	case "lower":
-		return num < threshold
-	case "lowerOrEqual":
-		return num <= threshold
-	case "equal":
-		return num == threshold
-	case "notEqual":
-		return num != threshold
+	case valueConditionGreater:
+		return number > threshold
+	case valueConditionGreaterOrEqual:
+		return number >= threshold
+	case valueConditionLower:
+		return number < threshold
+	case valueConditionLowerOrEqual:
+		return number <= threshold
 	default:
-		slog.Debug("unsupported filterByValue condition",
-			"id", config.ID)
+		slog.Debug("unsupported filterByValue condition", "id", config.ID)
 		return false
 	}
 }
 
-func parseThreshold(raw json.RawMessage) float64 {
-	var opts struct {
-		Value json.RawMessage `json:"value"`
-	}
-
+func decodeConditionOptions(raw json.RawMessage) (valueConditionOptions, bool) {
+	var opts valueConditionOptions
 	if err := json.Unmarshal(raw, &opts); err != nil {
-		return 0
+		return valueConditionOptions{Value: nil, From: nil, To: nil, Inclusive: false}, false
 	}
 
-	// Try as number first, then as string.
-	var num float64
-	if err := json.Unmarshal(opts.Value, &num); err == nil {
-		return num
-	}
+	return opts, true
+}
 
-	var str string
-	if err := json.Unmarshal(opts.Value, &str); err == nil {
-		if v, parseErr := strconv.ParseFloat(str, 64); parseErr == nil {
-			return v
+func valueOptionText(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case float64:
+		return strconv.FormatFloat(typed, 'g', -1, 64), true
+	case bool:
+		return strconv.FormatBool(typed), true
+	default:
+		return "", false
+	}
+}
+
+func filterValuesEqual(left, right any) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	if leftText, ok := left.(string); ok {
+		if rightText, stringOK := right.(string); stringOK {
+			return leftText == rightText
 		}
 	}
+	if leftBool, ok := left.(bool); ok {
+		rightBool, boolOK := right.(bool)
+		return boolOK && leftBool == rightBool
+	}
+	leftNumber, leftOK := toFloat64(left)
+	rightNumber, rightOK := toFloat64(right)
 
-	return 0
+	return leftOK && rightOK && leftNumber == rightNumber
 }
 
 func toFloat64(val any) (float64, bool) {
@@ -783,6 +933,13 @@ func toFloat64(val any) (float64, bool) {
 		}
 
 		return v, true
+	case string:
+		number, err := strconv.ParseFloat(v, 64)
+		if err != nil || math.IsNaN(number) {
+			return 0, false
+		}
+
+		return number, true
 	case nil:
 		return 0, false
 	default:
@@ -833,7 +990,7 @@ func rebuildFrameData(
 	frame *DataFrame, columns [][]any, keepRows []bool,
 ) {
 	for colIdx := range columns {
-		var filtered []any
+		filtered := make([]any, 0, len(keepRows))
 
 		for row, keep := range keepRows {
 			if keep && row < len(columns[colIdx]) {
@@ -922,14 +1079,14 @@ func reduceFields(frame *DataFrame, opts reduceOptions) {
 	}
 }
 
-// reduceSeriesToRows converts each numeric field into a row in a new
-// two-column frame: "Field" (string) and the reducer name (number).
+// reduceSeriesToRows converts each numeric field into a row with one
+// output column per selected reducer.
 func reduceSeriesToRows(frame *DataFrame, opts reduceOptions) {
-	reducerName := opts.Reducers[0]
-
-	var fieldNames []string
-
-	var reducedValues []float64
+	fieldNames := make([]string, 0)
+	reducedValues := make([][]any, len(opts.Reducers))
+	for index := range reducedValues {
+		reducedValues[index] = make([]any, 0)
+	}
 
 	for fieldIdx, field := range frame.Schema.Fields {
 		if field.Type != fieldTypeNumber {
@@ -942,17 +1099,28 @@ func reduceSeriesToRows(frame *DataFrame, opts reduceOptions) {
 		}
 
 		fieldNames = append(fieldNames, field.Name)
-		reducedValues = append(reducedValues, applyReducer(values, reducerName))
+		for reducerIndex, reducer := range opts.Reducers {
+			value := applyReducer(values, reducer)
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				reducedValues[reducerIndex] = append(reducedValues[reducerIndex], nil)
+				continue
+			}
+			reducedValues[reducerIndex] = append(reducedValues[reducerIndex], value)
+		}
 	}
 
-	namesJSON := mustMarshal(fieldNames)
-	valuesJSON := mustMarshal(reducedValues)
-
-	frame.Schema.Fields = []DataFrameField{
-		{Name: "Field", Type: fieldTypeString},     //nolint:exhaustruct // no labels/config
-		{Name: reducerName, Type: fieldTypeNumber}, //nolint:exhaustruct // no labels/config
+	fields := make([]DataFrameField, 0, len(opts.Reducers)+1)
+	fields = append(fields, DataFrameField{Name: "Field", Type: fieldTypeString}) //nolint:exhaustruct // no labels/config
+	columns := make([]json.RawMessage, 0, len(opts.Reducers)+1)
+	columns = append(columns, mustMarshal(fieldNames))
+	for index, reducer := range opts.Reducers {
+		fields = append(fields, DataFrameField{ //nolint:exhaustruct // no labels/config
+			Name: rowReducerName(reducer), Type: fieldTypeNumber,
+		})
+		columns = append(columns, mustMarshal(reducedValues[index]))
 	}
-	frame.Data.Values = []json.RawMessage{namesJSON, valuesJSON}
+	frame.Schema.Fields = fields
+	frame.Data.Values = columns
 }
 
 // applyReducer computes a single value from a slice using the named

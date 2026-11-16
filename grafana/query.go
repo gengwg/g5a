@@ -176,7 +176,15 @@ func (c *Client) QueryPanel(
 				fmt.Sprintf("%s: %s", refID, data.Error))
 		}
 	}
-	ApplyTransformations(result, panel.Transformations)
+	transformations := interpolateTransformations(
+		panel.Transformations,
+		variables,
+		variableOverrides,
+		intervalMs,
+		fromMs,
+		toMs,
+	)
+	ApplyTransformations(result, transformations)
 
 	return result, nil
 }
@@ -412,6 +420,46 @@ func interpolateTargetValue(
 	default:
 		return value
 	}
+}
+
+func interpolateTransformations(
+	transformations []Transformation,
+	variables []TemplateVariable,
+	overrides map[string]string,
+	intervalMs int,
+	fromMs int64,
+	toMs int64,
+) []Transformation {
+	if len(transformations) == 0 {
+		return transformations
+	}
+	resolved := make([]Transformation, len(transformations))
+	copy(resolved, transformations)
+	for index := range resolved {
+		if len(resolved[index].Options) == 0 {
+			continue
+		}
+		var options any
+		if err := json.Unmarshal(resolved[index].Options, &options); err != nil {
+			continue
+		}
+		value := interpolateTargetValue(
+			options,
+			variables,
+			overrides,
+			intervalMs,
+			defaultScrapeIntervalMs,
+			fromMs,
+			toMs,
+			toMs-fromMs,
+		)
+		raw, err := json.Marshal(value)
+		if err == nil {
+			resolved[index].Options = raw
+		}
+	}
+
+	return resolved
 }
 
 type dsQueryRequest struct {

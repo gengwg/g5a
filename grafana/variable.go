@@ -105,7 +105,7 @@ func formatVariableValue(
 			parts = append(parts, "var-"+variable.Name+"="+value)
 		}
 		return strings.Join(parts, "&")
-	case "regex":
+	case valueConditionRegex:
 		return regexValues(values)
 	default:
 		if len(values) > 1 || variable.Multi || variable.IncludeAll {

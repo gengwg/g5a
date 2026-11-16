@@ -90,7 +90,7 @@ func collectLabelReferences(transformation Transformation, required map[string]b
 				addLabelReference(required, rule.Field)
 			}
 		}
-	case "filterByValue":
+	case transformationFilterByValue:
 		var options filterByValueOptions
 		if err := json.Unmarshal(transformation.Options, &options); err == nil {
 			for _, filter := range options.Filters {

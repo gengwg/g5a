@@ -156,6 +156,72 @@ func TestApplyTransformationsJoinByField(t *testing.T) {
 	}
 }
 
+func TestApplyTransformationsJoinByFieldUnsupportedModeWarns(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"inner", "outerTabular"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+				"A": {Frames: []grafana.DataFrame{newTransformFrame(
+					"A", transformFields("Key", "Value"), `["a"]`, `[1]`,
+				)}},
+			}}
+			grafana.ApplyTransformations(result, []grafana.Transformation{{
+				ID: "joinByField", Options: json.RawMessage(`{"byField":"Key","mode":"` + mode + `"}`),
+			}})
+			require.Len(t, result.Warnings, 1)
+			assert.Contains(t, result.Warnings[0], mode)
+			assert.JSONEq(t, `["a"]`, string(result.Results["A"].Frames[0].Data.Values[0]))
+		})
+	}
+}
+
+func TestApplyTransformationsReduceSeriesToRowsUsesAllReducers(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A",
+			[]grafana.DataFrameField{
+				{Name: "temperature", Type: "number"},
+				{Name: "humidity", Type: "number"},
+				{Name: "site", Type: "string"},
+			},
+			`[3,4,5,6]`, `[10,20,30,40]`, `["a","a","a","a"]`,
+		)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "reduce", Options: json.RawMessage(`{"mode":"seriesToRows","reducers":["first","last","max"]}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	require.Len(t, frame.Schema.Fields, 4)
+	assert.Equal(t, "Field", frame.Schema.Fields[0].Name)
+	assert.Equal(t, "First", frame.Schema.Fields[1].Name)
+	assert.Equal(t, "Last", frame.Schema.Fields[2].Name)
+	assert.Equal(t, "Max", frame.Schema.Fields[3].Name)
+	assert.JSONEq(t, `["temperature","humidity"]`, string(frame.Data.Values[0]))
+	assert.JSONEq(t, `[3,10]`, string(frame.Data.Values[1]))
+	assert.JSONEq(t, `[6,40]`, string(frame.Data.Values[2]))
+	assert.JSONEq(t, `[6,40]`, string(frame.Data.Values[3]))
+}
+
+func TestApplyTransformationsReduceSeriesToRowsNullValues(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A", []grafana.DataFrameField{{Name: "value", Type: "number"}}, `[null,null]`,
+		)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "reduce", Options: json.RawMessage(`{"reducers":["first","count"]}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	assert.JSONEq(t, `[null]`, string(frame.Data.Values[1]))
+	assert.JSONEq(t, `[2]`, string(frame.Data.Values[2]))
+}
+
 func TestApplyTransformationsJoinByFieldThenFilterByValue(t *testing.T) {
 	t.Parallel()
 
@@ -193,6 +259,58 @@ func TestApplyTransformationsJoinByFieldThenFilterByValue(t *testing.T) {
 	assert.JSONEq(t, `["c"]`, string(frame.Data.Values[0]))
 	assert.JSONEq(t, `[null]`, string(frame.Data.Values[1]))
 	assert.JSONEq(t, `[30]`, string(frame.Data.Values[2]))
+}
+
+func TestApplyTransformationsFilterByValueNullAndRaggedColumns(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A", transformFields("Key", "Value"), `["a","b","c"]`, `[1]`,
+		)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "filterByValue",
+		Options: json.RawMessage(`{
+			"type":"include","match":"all",
+			"filters":[{"fieldName":"Value","config":{"id":"isNull","options":{}}}]
+		}`),
+	}})
+	frame := result.Results["A"].Frames[0]
+	assert.JSONEq(t, `["b","c"]`, string(frame.Data.Values[0]))
+	assert.JSONEq(t, `[]`, string(frame.Data.Values[1]))
+}
+
+func TestApplyTransformationsFilterByValueMissingFieldDoesNotMatchAll(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{newTransformFrame(
+			"A", transformFields("Key"), `["a"]`,
+		)}},
+	}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "filterByValue",
+		Options: json.RawMessage(`{
+			"type":"include","match":"all",
+			"filters":[{"fieldName":"Missing","config":{"id":"isNotNull","options":{}}}]
+		}`),
+	}})
+	assert.JSONEq(t, `[]`, string(result.Results["A"].Frames[0].Data.Values[0]))
+}
+
+func TestApplyTransformationsFilterByValueUnsupportedConditionWarns(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{}}
+	grafana.ApplyTransformations(result, []grafana.Transformation{{
+		ID: "filterByValue",
+		Options: json.RawMessage(`{
+			"filters":[{"fieldName":"Value","config":{"id":"inSet","options":{"value":["a"]}}}]
+		}`),
+	}})
+	require.Len(t, result.Warnings, 1)
+	assert.Contains(t, result.Warnings[0], "inSet")
 }
 
 func TestApplyTransformationsOrganize(t *testing.T) {

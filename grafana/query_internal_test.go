@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveBuiltinVariablesRateInterval(t *testing.T) {
@@ -76,6 +79,30 @@ func TestResolveBuiltinVariablesRateIntervalUsesDatasourceScrapeInterval(t *test
 	if got := resolveBuiltinVariables("$__rate_interval", 15000, 60000, 0, 0, 0); got != "4m" {
 		t.Errorf("rate interval = %q, want 4m", got)
 	}
+}
+
+func TestInterpolateTransformationsPreservesOriginalOptions(t *testing.T) {
+	t.Parallel()
+
+	var variables []TemplateVariable
+	require.NoError(t, json.Unmarshal([]byte(`[{"name":"env","current":{"value":"prod"}}]`), &variables))
+	transformations := []Transformation{{
+		ID: "filterByValue",
+		Options: json.RawMessage(`{
+			"filters":[{"fieldName":"Time","config":{"id":"between","options":{
+				"from":"${__from}","to":"$__to","value":"$env"
+			}}}]
+		}`),
+	}}
+	original := string(transformations[0].Options)
+	resolved := interpolateTransformations(transformations, variables, nil, 15000, 1000, 2000)
+	require.Len(t, resolved, 1)
+	assert.JSONEq(t, `{
+		"filters":[{"fieldName":"Time","config":{"id":"between","options":{
+			"from":"1000","to":"2000","value":"prod"
+		}}}]
+	}`, string(resolved[0].Options))
+	assert.Equal(t, original, string(transformations[0].Options))
 }
 
 func TestResolveTimeRangeAtHonorsTimezoneWeekStartAndDelay(t *testing.T) {

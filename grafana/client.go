@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const defaultScrapeIntervalMs = 15000
+
 // Client is an HTTP client for the Grafana API.
 type Client struct {
 	baseURL    *url.URL
@@ -242,7 +244,6 @@ type datasourceInfo struct {
 }
 
 func (c *Client) datasourceScrapeInterval(ctx context.Context, uid string) int {
-	const defaultScrapeIntervalMs = 15000
 	c.dsMutex.Lock()
 	defer c.dsMutex.Unlock()
 	if interval, ok := c.scrapeCache[uid]; ok {

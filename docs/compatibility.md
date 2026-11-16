@@ -63,17 +63,17 @@ Text panels remain visible in navigation. Alert-list acknowledgement and other a
 
 ## Transformations
 
-- `joinByField` with outer joins across frames and refIDs, including joins on Prometheus labels.
+- `joinByField` with outer joins across frames and refIDs, including joins on Prometheus labels. `inner` and `outerTabular` currently leave frames unjoined and produce a visible warning.
 - `organize` preserves label fields in their original relative order before numeric values. Other transformations expand labels only when needed by `joinByField`, `groupingToMatrix`, or exact-name/literal-alternative field filters; unrelated labels remain attached to their fields instead of becoming sparse table columns.
-- `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and `emptyValue`.
+- `groupingToMatrix` with `rowField`, `columnField`, `valueField`, and all `emptyValue` settings (`null`, `true`, `false`, `zero`, and `empty`; the default is an empty string).
 - `sortBy` with ordered field rules and numeric-aware stable sorting.
 - `merge` with field-name alignment and null padding for missing fields.
 - `filterFieldsByName`.
 - `organize`, including exclusions, renaming, and `indexByName` ordering.
-- `filterByValue`.
+- `filterByValue` with numeric comparisons, equality, null checks, regular expressions, case-insensitive substring filters, and inclusive/exclusive numeric or time ranges. Transformation options interpolate dashboard and built-in time variables. Unsupported condition IDs produce a visible warning.
 - `convertFieldType` for string-to-number conversion.
 - `calculateField` with binary arithmetic (including all-number-fields), unary operations, row reduction, cumulative sum/mean, trailing/centered moving windows, and row indices, including legacy/current operands, constants, aliases, field replacement, and time-aligned cross-query operands.
-- `reduce` with common reducers.
+- `reduce` with common reducers; series-to-rows emits one column per selected reducer.
 
 Unknown transformation IDs produce a visible warning in the affected panel. Other transformation types are not yet implemented.
 

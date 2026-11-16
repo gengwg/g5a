@@ -50,6 +50,6 @@ func TestApplyTransformations_GroupingToMatrix(t *testing.T) {
 	assert.Equal(t, "dns", frame.Schema.Fields[1].Name)
 	assert.Equal(t, "http", frame.Schema.Fields[2].Name)
 	assert.JSONEq(t, `["alpha","beta"]`, string(frame.Data.Values[0]))
-	assert.JSONEq(t, `[0.98,null]`, string(frame.Data.Values[1]))
+	assert.JSONEq(t, `[0.98,""]`, string(frame.Data.Values[1]))
 	assert.JSONEq(t, `[0.97,0.89]`, string(frame.Data.Values[2]))
 }

@@ -6,6 +6,13 @@ import (
 	"fmt"
 )
 
+const (
+	matrixEmptyNull  = "null"
+	matrixEmptyTrue  = "true"
+	matrixEmptyFalse = "false"
+	matrixEmptyZero  = "zero"
+)
+
 type groupingToMatrixOptions struct {
 	RowField    string `json:"rowField"`
 	ColumnField string `json:"columnField"`
@@ -134,11 +141,18 @@ func (m *matrixBuilder) addCell(rowValue any, columnName string, value any) {
 }
 
 func (m *matrixBuilder) emptyValue() any {
-	if m.options.EmptyValue == "zero" {
+	switch m.options.EmptyValue {
+	case matrixEmptyNull:
+		return nil
+	case matrixEmptyTrue:
+		return true
+	case matrixEmptyFalse:
+		return false
+	case matrixEmptyZero:
 		return float64(0)
+	default:
+		return ""
 	}
-
-	return nil
 }
 
 func (m *matrixBuilder) dataFrame(refID string) DataFrame {
