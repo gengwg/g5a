@@ -567,6 +567,53 @@ func TestGetDashboardV2TabsAreStacked(t *testing.T) {
 	assert.Equal(t, 11, dashboard.Panels[4].GridPos.Y)
 }
 
+func TestGetDashboardV2TabsRepeatWithHeadings(t *testing.T) {
+	t.Parallel()
+
+	resource := fmt.Sprintf(`{
+		"spec":{
+			"title":"Repeated tabs",
+			"elements":{%s},
+			"layout":{"kind":"TabsLayout","spec":{"tabs":[
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"$cluster",
+					"repeat":{"mode":"variable","value":"cluster"},
+					"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+				}},
+				{"kind":"TabsLayoutTab","spec":{
+					"title":"Static",
+					"layout":{"kind":"GridLayout","spec":{"items":[%s]}}
+				}}
+			]}}
+		}
+	}`,
+		strings.Join([]string{v2TestElement(1), v2TestElement(2)}, ","),
+		v2TestItem(1, "GridLayoutItem"), v2TestItem(2, "GridLayoutItem"),
+	)
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	instances := expandV2ClusterRows(dashboard)
+	require.Len(t, instances, 6)
+	wantY := []int{0, 2, 7, 9, 14, 16}
+	for index, want := range wantY {
+		assert.Equal(t, want, instances[index].Panel.GridPos.Y)
+	}
+	assert.Equal(t, "a", instances[0].Panel.Title)
+	assert.Equal(t, "b", instances[2].Panel.Title)
+	assert.JSONEq(t, `{"content":"## a"}`, string(instances[0].Panel.Options))
+	assert.JSONEq(t, `{"content":"## b"}`, string(instances[2].Panel.Options))
+	assert.Equal(t, "Static", instances[4].Panel.Title)
+	keys := make(map[string]bool, len(instances))
+	for _, instance := range instances {
+		assert.False(t, keys[instance.Key], "duplicate key %q", instance.Key)
+		keys[instance.Key] = true
+	}
+}
+
 func TestGetDashboardV2TabIDsAvoidZeroElementIDs(t *testing.T) {
 	t.Parallel()
 

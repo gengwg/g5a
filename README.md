@@ -19,7 +19,7 @@ Screenshots use public, synthetic, or redacted data. Private instance, cluster, 
 
 - Dashboard search and direct dashboard/panel URLs.
 - Grafana's 24-column grid with vertical scrolling and panel zoom.
-- Classic dashboards and dashboard.grafana.app v2 resources with GridLayout, RowsLayout, AutoGrid, stacked Tabs, and library-panel expansion.
+- Classic dashboards and dashboard.grafana.app v2 resources with GridLayout, RowsLayout, AutoGrid, stacked/repeated Tabs, and library-panel expansion.
 - Horizontal and vertical repeated panels, repeated rows, and responsive terminal wrapping.
 - Datasource, custom, constant, textbox, interval, switch, `label_values`, and `query_result` variables, including multi-select and All, plus datasource-native `queryType` variables.
 - Grafana `/api/ds/query` requests that preserve instant/range and datasource-specific target fields.

@@ -7,7 +7,7 @@ Unsupported transformations and panel types are shown explicitly rather than sil
 ## Dashboard model and APIs
 
 - Classic dashboard JSON from `GET /api/dashboards/uid/:uid`.
-- Dashboard resources from `/apis/dashboard.grafana.app/{v2,v2beta1,v1beta1,v1}/namespaces/default/dashboards/:uid`, with GridLayout, RowsLayout, AutoGrid, and Tabs converted into the existing dashboard model. Tabs are stacked with text headings; AutoGrid uses the configured columns and row heights. Library panels are expanded through `GET /api/library-elements/:uid`; unsupported variable kinds return explicit errors.
+- Dashboard resources from `/apis/dashboard.grafana.app/{v2,v2beta1,v1beta1,v1}/namespaces/default/dashboards/:uid`, with GridLayout, RowsLayout, AutoGrid, and Tabs converted into the existing dashboard model. Tabs are stacked with text headings and can repeat with their panels; AutoGrid uses the configured columns and row heights. Library panels are expanded through `GET /api/library-elements/:uid`; unsupported variable kinds return explicit errors.
 - Dashboard search through `GET /api/search`.
 - Panel and variable queries through Grafana's backend APIs, primarily `POST /api/ds/query`.
 - Current alert rules through `/api/prometheus/:uid/api/v1/rules`, with legacy `/api/alerts` fallback.
@@ -41,7 +41,7 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 - Horizontal and vertical panel repeats with scoped variable values.
 - Row repeats with scoped variable values, including repeated panels within repeated rows.
 - `repeatDirection` and `maxPerRow` for panel repeats.
-- Schema v2 GridLayout, RowsLayout, AutoGrid, stacked Tabs, and library panels are supported.
+- Schema v2 GridLayout, RowsLayout, AutoGrid, stacked/repeated Tabs, and library panels are supported.
 - Nested RowsLayout levels that both define repeats return an explicit error; one repeating level is supported.
 - Narrow terminals reduce repeated-panel columns and scroll vertically.
 

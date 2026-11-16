@@ -1,6 +1,7 @@
 package grafana
 
 import (
+	"encoding/json"
 	"maps"
 	"sort"
 	"strconv"
@@ -281,6 +282,7 @@ func newPanelInstance(
 	repeatLength int,
 ) PanelInstance {
 	panel.Title = ResolveVariables(panel.Title, variables, overrides)
+	resolveTextPanelOptions(&panel, variables, overrides)
 
 	return PanelInstance{
 		Key:          key,
@@ -289,6 +291,23 @@ func newPanelInstance(
 		RepeatIndex:  repeatIndex,
 		RepeatLength: max(repeatLength, 1),
 	}
+}
+
+func resolveTextPanelOptions(panel *Panel, variables []TemplateVariable, overrides map[string]string) {
+	if panel.Type != "text" || len(panel.Options) == 0 {
+		return
+	}
+	var options map[string]json.RawMessage
+	if err := json.Unmarshal(panel.Options, &options); err != nil {
+		return
+	}
+	var content string
+	raw, ok := options["content"]
+	if !ok || json.Unmarshal(raw, &content) != nil {
+		return
+	}
+	options["content"] = mustMarshal(ResolveVariables(content, variables, overrides))
+	panel.Options = mustMarshal(options)
 }
 
 func repeatPerRow(panel Panel, valueCount int) int {

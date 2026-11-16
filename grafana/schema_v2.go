@@ -132,7 +132,10 @@ type dashboardV2LayoutRow struct {
 type dashboardV2LayoutTab struct {
 	Kind string `json:"kind"`
 	Spec struct {
-		Title  string            `json:"title"`
+		Title  string `json:"title"`
+		Repeat *struct {
+			Value string `json:"value"`
+		} `json:"repeat"`
 		Layout dashboardV2Layout `json:"layout"`
 	} `json:"spec"`
 }
@@ -521,20 +524,32 @@ func (layout dashboardV2Layout) tabsPanels(
 		if title == "" {
 			title = fmt.Sprintf("Tab %d", index+1)
 		}
-		panels = append(panels, Panel{
+		heading := Panel{
 			ID: ids.nextID(), Type: "text", Title: title,
 			Targets: nil, Datasource: nil,
 			GridPos:     GridPos{H: 2, W: dashboardV2GridColumns, X: 0, Y: yOffset},
 			FieldConfig: nil,
 			Options:     mustMarshal(map[string]string{"content": "## " + title}),
 			Panels:      nil, Transformations: nil, Repeat: "", RepeatDirection: "", MaxPerRow: 0, Collapsed: false, row: nil,
-		})
+		}
 		tabPanels, err := tab.Spec.Layout.panelsAtOffset(elements, yOffset+2, ids)
 		if err != nil {
 			return nil, err
 		}
-		panels = append(panels, tabPanels...)
-		yOffset += 2 + layoutHeight(tab.Spec.Layout)
+		height := 2 + layoutHeight(tab.Spec.Layout)
+		tabGroup := &panelRow{
+			key: fmt.Sprintf("v2-tab-%d", heading.ID), repeat: "",
+			baseY: yOffset, height: height,
+		}
+		if tab.Spec.Repeat != nil {
+			tabGroup.repeat = tab.Spec.Repeat.Value
+		}
+		groupPanels := append([]Panel{heading}, tabPanels...)
+		if err := assignRowGroup(groupPanels, tabGroup); err != nil {
+			return nil, err
+		}
+		panels = append(panels, groupPanels...)
+		yOffset += height
 	}
 
 	return panels, nil
