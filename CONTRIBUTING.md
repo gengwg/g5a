@@ -7,7 +7,7 @@ Keep the application read-only and dashboard-driven. Do not special-case a compa
 1. Add focused tests for the behavior, including a failure case where useful.
 2. Run `go test ./...` and `go test -race ./...`.
 3. Run `make lint`.
-4. For query, variable, transformation, or renderer changes, run `make test-integration` with Docker available.
+4. For query, variable, transformation, or renderer changes, run `make test-integration` with Docker available and `make test-terminal` on Linux.
 5. Update `docs/compatibility.md` and the README when user-visible support changes.
 
 Prefer small, upstreamable changes and existing dependencies. New dependencies need a clear benefit. Follow the existing Go style and keep exported APIs stable unless a breaking change is intentional.

@@ -144,9 +144,12 @@ make test                    # unit tests
 make test-race               # race detector
 make lint                    # golangci-lint
 make test-integration        # real Prometheus + Grafana containers
+make test-terminal           # synthetic Grafana + assertion-based PTY tests (Linux)
 ```
 
 Integration tests require Docker. They create isolated temporary networks and containers for Prometheus and Grafana, then exercise variables, repeated panels, instant/range queries, joins, transformations, mappings, and renderers.
+
+Terminal tests require Python 3, `bash`, util-linux `script`, and coreutils `timeout`. They build the real binary, drive it through a pseudo-terminal against synthetic read-only Grafana fixtures, and assert on the rendered output and captured API requests. Transcripts and captures are written to a fresh `/tmp/g5a-e2e-*` directory for each suite.
 
 ## Origin and credit
 
