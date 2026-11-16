@@ -104,6 +104,7 @@ Basic auth is also available through `GRAFANA_USERNAME` and `GRAFANA_PASSWORD`, 
 --token       Grafana service account token (env: GRAFANA_SERVICE_ACCOUNT_TOKEN)
 --username    Grafana basic auth username (env: GRAFANA_USERNAME)
 --password    Grafana basic auth password (env: GRAFANA_PASSWORD)
+--debug       Enable request and response debug logs
 --refresh     Auto-refresh interval (dashboard setting or 30s; 0 disables)
 ```
 
@@ -132,7 +133,7 @@ In a zoomed panel, `j`/`k` navigates panels, `g` opens the panel picker, and `f`
 
 The application performs read-only dashboard, datasource, query, and alert-rule API requests. It does not edit dashboards, alerting rules, silences, or datasource configuration.
 
-Request and response bodies are not logged or included in returned error strings. Logs contain only method, path, status, and byte counts. URL userinfo is removed from transport errors. On Linux, the default log is `${XDG_CACHE_HOME:-~/.cache}/g5a/g5a.log`; the directory is created with mode `0700` and the file with mode `0600`. Other platforms use the corresponding `os.UserCacheDir` location.
+Request and response bodies are not logged or included in returned error strings. Request lines are off by default; `--debug` enables method, path, status, and byte-count logs without bodies. URL userinfo is removed from transport errors. On Linux, the default log is `${XDG_CACHE_HOME:-~/.cache}/g5a/g5a.log`; the directory is created with mode `0700` and the file with mode `0600`. Other platforms use the corresponding `os.UserCacheDir` location.
 
 Use a least-privilege read-only service account and TLS for remote Grafana instances.
 

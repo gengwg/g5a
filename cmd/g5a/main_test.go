@@ -1,6 +1,17 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/gengwg/g5a/grafana"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestParseGrafanaURL(t *testing.T) {
 	t.Parallel()
@@ -41,5 +52,49 @@ func TestParseGrafanaURLDefaults(t *testing.T) {
 	}
 	if parts.orgID != "" || len(parts.variables) != 0 {
 		t.Errorf("unexpected defaults: %+v", parts)
+	}
+}
+
+func TestInitStderrDebugLogging(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		debug     bool
+		wantDebug bool
+	}{
+		{name: "default", debug: false, wantDebug: false},
+		{name: "debug", debug: true, wantDebug: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cacheDir := t.TempDir()
+			t.Setenv("XDG_CACHE_HOME", cacheDir)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`[{"uid":"body-secret"}]`))
+			}))
+			defer server.Close()
+
+			cleanup := initStderr(test.debug)
+			client, err := grafana.NewClient(
+				server.URL,
+				grafana.WithToken("token-secret"),
+				grafana.WithHTTPClient(server.Client()),
+			)
+			if err == nil {
+				err = client.Ping(t.Context())
+			}
+			cleanup()
+			require.NoError(t, err)
+
+			contents, err := os.ReadFile(filepath.Join(cacheDir, "g5a", "g5a.log"))
+			require.NoError(t, err)
+			log := string(contents)
+			assert.Equal(t, test.wantDebug, strings.Contains(log, "grafana request"))
+			assert.NotContains(t, log, "token-secret")
+			assert.NotContains(t, log, "body-secret")
+			if test.wantDebug {
+				assert.Contains(t, log, "level=DEBUG")
+				assert.Contains(t, log, "path=/api/search")
+				assert.Contains(t, log, "status=200")
+			}
+		})
 	}
 }

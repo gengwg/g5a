@@ -64,6 +64,10 @@ When both are available, token auth takes precedence.`,
 		&flags.password, "password", "",
 		"Grafana basic auth password (env: GRAFANA_PASSWORD)",
 	)
+	rootCmd.Flags().BoolVar(
+		&flags.debug, "debug", false,
+		"Enable request and response debug logs",
+	)
 	rootCmd.Flags().DurationVar(
 		&flags.refresh, "refresh", 0,
 		"Auto-refresh interval (dashboard setting or 30s; 0 disables)",
@@ -81,13 +85,14 @@ type flags struct {
 	token      string
 	username   string
 	password   string
+	debug      bool
 	refresh    time.Duration
 	refreshSet bool
 }
 
 // run creates the Grafana client and starts the TUI.
 func run(f flags) error {
-	cleanup := initStderr()
+	cleanup := initStderr(f.debug)
 	defer cleanup()
 
 	f.url = resolveEnv(f.url, "GRAFANA_URL")
@@ -234,7 +239,7 @@ func parseGrafanaURL(rawURL string) grafanaURLParts {
 // initStderr redirects stderr to a log file so that log output does not
 // interfere with the terminal UI. The returned function restores the
 // original stderr and should be called via defer.
-func initStderr() func() {
+func initStderr(debug bool) func() {
 	cleanup := func() {}
 
 	oldStderr := os.Stderr
@@ -261,8 +266,12 @@ func initStderr() func() {
 	}
 
 	os.Stderr = logFile
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{ //nolint:exhaustruct // only Level needed
-		Level: slog.LevelInfo,
+		Level: level,
 	})))
 
 	cleanup = func() {
