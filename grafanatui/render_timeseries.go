@@ -342,12 +342,28 @@ func compactLegendName(name string, width int) string {
 }
 
 func trimLegendScheme(name string) string {
-	parsed, err := url.Parse(name)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return name
+	for _, scheme := range []string{"https://", "http://"} {
+		start := legendSchemeIndex(name, scheme)
+		if start < 0 {
+			continue
+		}
+		parsed, err := url.Parse(name[start:])
+		if err == nil && parsed.Host != "" {
+			return name[:start] + name[start+len(scheme):]
+		}
 	}
 
-	return strings.TrimPrefix(name, parsed.Scheme+"://")
+	return name
+}
+
+func legendSchemeIndex(name, scheme string) int {
+	for start := 0; start+len(scheme) <= len(name); start++ {
+		if strings.EqualFold(name[start:start+len(scheme)], scheme) {
+			return start
+		}
+	}
+
+	return -1
 }
 
 func buildLegendWithCalculations(
@@ -357,14 +373,56 @@ func buildLegendWithCalculations(
 	calculations []string,
 ) string {
 	parts := make([]string, 0, len(seriesNames))
+	seriesWidth := maxWidth
+	if len(seriesNames) > 0 {
+		seriesWidth = max((maxWidth-2*(len(seriesNames)-1))/len(seriesNames), 1)
+	}
 	for index, name := range seriesNames {
 		style := lipgloss.NewStyle().Foreground(chartColor(index))
-		name = compactLegendName(name, min(maxWidth, legendNameMaxWidth))
-		text := "■ " + name + legendCalculations(seriesData[name], calculations)
+		calculationText := legendCalculations(seriesData[name], calculations)
+		nameWidth := min(
+			max(seriesWidth-2-lipgloss.Width(calculationText), 1),
+			legendNameMaxWidth,
+		)
+		name = compactLegendName(name, nameWidth)
+		text := "■ " + name + calculationText
 		parts = append(parts, style.Render(text))
 	}
 
-	return lipgloss.NewStyle().MaxWidth(maxWidth).Render(strings.Join(parts, "  "))
+	return packLegendParts(parts, maxWidth)
+}
+
+func packLegendParts(parts []string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	lines := make([]string, 0, legendLines)
+	current := make([]string, 0, len(parts))
+	currentWidth := 0
+	for _, part := range parts {
+		part = lipgloss.NewStyle().MaxWidth(maxWidth).Render(part)
+		partWidth := lipgloss.Width(part)
+		gapWidth := 0
+		if len(current) > 0 {
+			gapWidth = 2
+		}
+		if len(current) > 0 && currentWidth+gapWidth+partWidth > maxWidth {
+			lines = append(lines, strings.Join(current, "  "))
+			if len(lines) == legendLines {
+				return strings.Join(lines, "\n")
+			}
+			current = nil
+			currentWidth = 0
+			gapWidth = 0
+		}
+		current = append(current, part)
+		currentWidth += gapWidth + partWidth
+	}
+	if len(current) > 0 {
+		lines = append(lines, strings.Join(current, "  "))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func buildCalculatedLegend(

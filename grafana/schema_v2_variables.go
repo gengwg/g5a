@@ -6,7 +6,12 @@ import (
 	"fmt"
 )
 
-const v2CustomVariableKind = "CustomVariable"
+const (
+	v2CustomVariableKind    = "CustomVariable"
+	v2SwitchVariableKind    = "SwitchVariable"
+	v2SwitchEnabledDefault  = "true"
+	v2SwitchDisabledDefault = "false"
+)
 
 var (
 	errUnsupportedV2Variable = errors.New("unsupported dashboard v2 variable kind")
@@ -187,9 +192,50 @@ func classicV2Variable(source dashboardV2Variable) (TemplateVariable, error) {
 		return classicSimpleV2Variable(source, "textbox")
 	case "IntervalVariable":
 		return classicSimpleV2Variable(source, "interval")
+	case v2SwitchVariableKind:
+		return classicSwitchV2Variable(source)
 	default:
 		return TemplateVariable{}, fmt.Errorf("%w: %s", errUnsupportedV2Variable, source.Kind)
 	}
+}
+
+func classicSwitchV2Variable(source dashboardV2Variable) (TemplateVariable, error) {
+	var spec struct {
+		v2VariableCommon
+
+		Current       string `json:"current"`
+		EnabledValue  string `json:"enabledValue"`
+		DisabledValue string `json:"disabledValue"`
+	}
+	if err := json.Unmarshal(source.Spec, &spec); err != nil {
+		return TemplateVariable{}, fmt.Errorf("decoding %s variable: %w", source.Kind, err)
+	}
+	if spec.Current == "" {
+		spec.Current = v2SwitchDisabledDefault
+	}
+	if spec.EnabledValue == "" {
+		spec.EnabledValue = v2SwitchEnabledDefault
+	}
+	if spec.DisabledValue == "" {
+		spec.DisabledValue = v2SwitchDisabledDefault
+	}
+	variable := spec.classic()
+	variable.Type = variableTypeCustom
+	variable.Current = TemplateVariableCurrent{
+		Text: mustMarshal(spec.Current), Value: mustMarshal(spec.Current),
+	}
+	variable.Options = []TemplateVariableOption{
+		{
+			Text: spec.EnabledValue, Value: spec.EnabledValue,
+			Selected: spec.Current == spec.EnabledValue,
+		},
+		{
+			Text: spec.DisabledValue, Value: spec.DisabledValue,
+			Selected: spec.Current == spec.DisabledValue,
+		},
+	}
+
+	return variable, nil
 }
 
 func classicSimpleV2Variable(

@@ -33,7 +33,7 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 | Multi-value and All | Supported, including repeat expansion |
 | Raw, pipe, regex, CSV, JSON, query-param formatting | Supported |
 | Saved multi-value selections | Supported |
-| Dashboard schema v2 | GridLayout and RowsLayout supported; datasource, query, custom, constant, textbox, and interval variables |
+| Dashboard schema v2 | GridLayout and RowsLayout supported; datasource, query, custom, constant, textbox, interval, and switch variables |
 
 ## Repeated panels and layout
 
@@ -80,7 +80,7 @@ Unknown transformation IDs produce a visible warning in the affected panel. Othe
 ## Field presentation
 
 - DataFrame `field.Config`, panel defaults, and ordered `byName` / `byRegexp` overrides.
-- Display names, compact datasource `displayNameFromDS` names (metric prefix or first label value), and `${__field.labels.name}` interpolation.
+- Display names, compact datasource `displayNameFromDS` names (metric prefix or first label value), width-aware URL legends, and `${__field.labels.name}` interpolation.
 - Units, decimals, no-value text, min/max, and absolute/percentage thresholds.
 - DataFrame time fields rendered as local timestamps.
 - Value, range, regex, null, and NaN mappings.

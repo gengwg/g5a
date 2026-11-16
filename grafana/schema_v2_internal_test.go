@@ -12,7 +12,7 @@ func TestClassicV2VariableHideModes(t *testing.T) {
 
 	kinds := []string{
 		"DatasourceVariable", "QueryVariable", "CustomVariable",
-		"ConstantVariable", "TextVariable", "IntervalVariable",
+		"ConstantVariable", "TextVariable", "IntervalVariable", v2SwitchVariableKind,
 	}
 	modes := map[string]int{
 		"dontHide": 0, "hideLabel": 1, "hideVariable": 2, "inControlsMenu": 3,
@@ -34,6 +34,55 @@ func TestClassicV2VariableHideModes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestClassicV2SwitchVariable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		spec         string
+		wantOptions  []string
+		wantSelected string
+	}{
+		{
+			name: "custom values", spec: `{"name":"switch","current":"on","enabledValue":"on","disabledValue":"off"}`,
+			wantOptions: []string{"on", "off"}, wantSelected: "on",
+		},
+		{
+			name: "defaults", spec: `{"name":"switch"}`,
+			wantOptions: []string{"true", "false"}, wantSelected: "false",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			variable, err := classicV2Variable(dashboardV2Variable{
+				Kind: v2SwitchVariableKind, Spec: json.RawMessage(test.spec),
+			})
+			if err != nil {
+				t.Fatalf("classicV2Variable: %v", err)
+			}
+			if variable.Type != variableTypeCustom {
+				t.Errorf("type = %q, want custom", variable.Type)
+			}
+			options := parseCustomVariableOptions(variable)
+			if len(options) != len(test.wantOptions) {
+				t.Fatalf("options = %v, want %v", options, test.wantOptions)
+			}
+			for index, want := range test.wantOptions {
+				if options[index] != want {
+					t.Errorf("option %d = %q, want %q", index, options[index], want)
+				}
+			}
+			selected := defaultVariableSelection(
+				variable, options, resolveCurrentValue(variable),
+			)
+			if selected != test.wantSelected {
+				t.Errorf("selection = %q, want %q", selected, test.wantSelected)
+			}
+		})
 	}
 }
 
