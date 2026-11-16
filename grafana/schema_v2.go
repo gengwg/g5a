@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 const (
-	dashboardV2GridColumns = 24
-	dashboardLayoutGrid    = "GridLayout"
+	dashboardV2GridColumns    = 24
+	defaultDashboardNamespace = "default"
+	dashboardLayoutGrid       = "GridLayout"
 )
 
 var (
@@ -145,12 +147,31 @@ type dashboardV2Variable struct {
 	Spec json.RawMessage `json:"spec"`
 }
 
+func (c *Client) dashboardNamespace() string {
+	cloud := strings.HasSuffix(c.baseURL.Hostname(), ".grafana.net")
+	if c.orgID != "" {
+		if cloud {
+			return "stacks-" + c.orgID
+		}
+
+		return "org-" + c.orgID
+	}
+	if cloud {
+		stack := strings.SplitN(c.baseURL.Hostname(), ".", 2)[0]
+		if stack != "" {
+			return "stacks-" + stack
+		}
+	}
+
+	return defaultDashboardNamespace
+}
+
 func (c *Client) getDashboardV2(ctx context.Context, uid string) (*Dashboard, error) {
 	versions := []string{"v2", "v2beta1", "v1beta1", "v1"}
 	var lastErr error
 	for _, version := range versions {
 		path := "/apis/dashboard.grafana.app/" + version +
-			"/namespaces/default/dashboards/" + url.PathEscape(uid)
+			"/namespaces/" + url.PathEscape(c.dashboardNamespace()) + "/dashboards/" + url.PathEscape(uid)
 		var raw json.RawMessage
 		if err := c.doJSON(ctx, path, &raw); err != nil {
 			lastErr = err

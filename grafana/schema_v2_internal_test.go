@@ -4,8 +4,34 @@ package grafana
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"testing"
 )
+
+func TestDashboardNamespace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		host  string
+		orgID string
+		want  string
+	}{
+		{name: "default", host: "grafana.example.com", want: "default"},
+		{name: "other org", host: "grafana.example.com", orgID: "2", want: "org-2"},
+		{name: "cloud org", host: "stack.grafana.net", orgID: "123", want: "stacks-123"},
+		{name: "cloud host", host: "stack.grafana.net", want: "stacks-stack"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			client := &Client{orgID: test.orgID, baseURL: &url.URL{Scheme: "https", Host: test.host}}
+			if got := client.dashboardNamespace(); got != test.want {
+				t.Errorf("namespace = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestClassicV2VariableHideModes(t *testing.T) {
 	t.Parallel()

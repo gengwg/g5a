@@ -7,7 +7,7 @@ Unsupported transformations and panel types are shown explicitly rather than sil
 ## Dashboard model and APIs
 
 - Classic dashboard JSON from `GET /api/dashboards/uid/:uid`.
-- Dashboard resources from `/apis/dashboard.grafana.app/{v2,v2beta1,v1beta1,v1}/namespaces/default/dashboards/:uid`, with GridLayout, RowsLayout, AutoGrid, and Tabs converted into the existing dashboard model. Tabs are stacked with text headings and can repeat with their panels; AutoGrid uses the configured columns and row heights. Library panels are expanded through `GET /api/library-elements/:uid`; unsupported variable kinds return explicit errors.
+- Dashboard resources from `/apis/dashboard.grafana.app/{v2,v2beta1,v1beta1,v1}/namespaces/:namespace/dashboards/:uid`, with GridLayout, RowsLayout, AutoGrid, and Tabs converted into the existing dashboard model. Namespace selection uses `default` for org 1, `org-<id>` for other OSS orgs, and `stacks-<id>` for Grafana Cloud. Tabs are stacked with text headings and can repeat with their panels; AutoGrid uses the configured columns and row heights. Library panels are expanded through `GET /api/library-elements/:uid`; unsupported variable kinds return explicit errors.
 - Dashboard search through `GET /api/search`.
 - Panel and variable queries through Grafana's backend APIs, primarily `POST /api/ds/query`.
 - Current alert rules through `/api/prometheus/:uid/api/v1/rules`, with legacy `/api/alerts` fallback.

@@ -348,6 +348,31 @@ func TestGetDashboardV2RowsLayoutOffsetsRows(t *testing.T) {
 	assert.NotEqual(t, instances[0].Key, instances[1].Key)
 }
 
+func TestGetDashboardV2UsesOrgNamespace(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotOrgID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/dashboards/uid/demo" {
+			http.Error(w, "legacy unavailable", http.StatusBadRequest)
+			return
+		}
+		gotPath = r.URL.Path
+		gotOrgID = r.Header.Get("X-Grafana-Org-Id")
+		_, _ = w.Write([]byte(
+			`{"spec":{"title":"Org dashboard","elements":{},` +
+				`"layout":{"kind":"GridLayout","spec":{"items":[]}}}}`,
+		))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithOrgID("2"), grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	_, err = client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	assert.Equal(t, "/apis/dashboard.grafana.app/v2/namespaces/org-2/dashboards/demo", gotPath)
+	assert.Equal(t, "2", gotOrgID)
+}
+
 func TestGetDashboardV2NestedRowRepeats(t *testing.T) {
 	t.Parallel()
 
