@@ -67,6 +67,11 @@ def run_tui(url, output_path, wait_seconds=6, keys=""):
         )
     output = output_path.read_bytes()
     text = ANSI.sub("", output.decode("utf-8", errors="replace"))
+    text = "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.startswith(("Script started on ", "Script done on "))
+    )
     if not text.strip():
         raise RuntimeError(
             f"no terminal output; stdout={result.stdout[-300:]!r}; stderr={result.stderr[-300:]!r}"

@@ -17,3 +17,8 @@ jobs:
       - run: make test-race
       - run: make test-integration
       - run: make test-terminal
+      - name: Print terminal transcripts on failure
+        if: failure()
+        run: |
+          find /tmp -maxdepth 2 -path '/tmp/g5a-e2e-*/*.txt' \
+            -exec sh -c 'for file; do echo "--- $file"; tail -40 "$file"; done' _ {} +
