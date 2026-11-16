@@ -167,3 +167,20 @@ func TestDashboardRefID(t *testing.T) {
 		}
 	}
 }
+
+func TestQueryResultOptionsIncludeMetricValueAndTimestamp(t *testing.T) {
+	t.Parallel()
+
+	frame := DataFrame{}
+	frame.Schema.Fields = []DataFrameField{
+		{Name: "Time", Type: "time"},
+		{Name: "up", Type: "number", Labels: map[string]string{"cluster": "alpha"}},
+	}
+	frame.Data.Values = []json.RawMessage{json.RawMessage(`[1000]`), json.RawMessage(`[1]`)}
+	options := variableOptionsFromFrames(&QueryResult{Results: map[string]QueryResultData{
+		"A": {Frames: []DataFrame{frame}},
+	}})
+	if len(options) != 1 || options[0] != `up{cluster="alpha"} 1 1000` {
+		t.Errorf("options = %v, want metric value timestamp", options)
+	}
+}

@@ -476,15 +476,59 @@ func variableOptionsFromFrames(result *QueryResult) []string {
 					}
 					continue
 				}
-				if len(field.Labels) == 0 {
+				if field.Type == fieldTypeNumber {
+					values = append(values, fieldSampleValues(frame, fieldIndex)...)
 					continue
 				}
-				values = append(values, fieldLabelText(field))
 			}
 		}
 	}
 
 	return values
+}
+
+func fieldSampleValues(frame DataFrame, fieldIndex int) []string {
+	field := frame.Schema.Fields[fieldIndex]
+	numbers, err := parseNumberValues(frame.Data.Values[fieldIndex])
+	if err != nil {
+		return nil
+	}
+	metric := field.Name
+	if metric == "" {
+		metric = "Value"
+	}
+	if name := field.Labels["__name__"]; name != "" {
+		metric = name
+	}
+	timestamps := fieldTimestamps(frame)
+	values := make([]string, 0, len(numbers))
+	for index, number := range numbers {
+		value := strconv.FormatFloat(number, 'g', -1, 64)
+		switch {
+		case index < len(timestamps):
+			values = append(values, fmt.Sprintf("%s%s %s %d", metric, fieldLabelText(field), value, timestamps[index]))
+		case len(field.Labels) > 0:
+			values = append(values, fieldLabelText(field))
+		default:
+			values = append(values, value)
+		}
+	}
+
+	return values
+}
+
+func fieldTimestamps(frame DataFrame) []int64 {
+	for index, field := range frame.Schema.Fields {
+		if field.Type != fieldTypeTime {
+			continue
+		}
+		timestamps, err := parseTimeValues(frame.Data.Values[index])
+		if err == nil {
+			return timestamps
+		}
+	}
+
+	return nil
 }
 
 func fieldLabelText(field DataFrameField) string {
