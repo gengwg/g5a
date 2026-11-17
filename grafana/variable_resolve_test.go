@@ -679,6 +679,96 @@ func TestResolveVariableOptionsWithChangesInterpolatesRegexAndRefetchesDependent
 	assert.Equal(t, []string{"up", "up"}, expressions)
 }
 
+func TestResolveVariableOptionsWithChangesEscapesRegexSelections(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		multi     bool
+		selection string
+		regex     string
+		wantDS    []string
+		wantHost  []string
+	}{
+		{
+			name: "single value is escaped without a capture group", multi: false,
+			selection: "prod.1", wantDS: []string{"prod.1-prom"}, wantHost: []string{"prod.1-a"},
+		},
+		{
+			name: "multi values form an escaped capture alternation", multi: true,
+			selection: "prod.1,prodX1", wantDS: []string{"prod.1-prom", "prodX1-prom"},
+			wantHost: []string{"prod.1", "prodX1"},
+		},
+		{
+			name: "explicit raw format remains unescaped", multi: false,
+			selection: "prod.1", regex: `/^${env:raw}-/`,
+			wantDS: []string{"prod.1-prom", "prodX1-prom"}, wantHost: []string{"prod.1-a", "prodX1-a"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/datasources" {
+					_, _ = w.Write([]byte(`[
+						{"uid":"prod.1-prom","name":"prod.1-prom","type":"prometheus"},
+						{"uid":"prodX1-prom","name":"prodX1-prom","type":"prometheus"},
+						{"uid":"prodX2-prom","name":"prodX2-prom","type":"prometheus"}
+					]`))
+					return
+				}
+				var request struct {
+					Queries []struct {
+						RefID string `json:"refId"`
+					} `json:"queries"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decoding query: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				for _, query := range request.Queries {
+					_ = json.NewEncoder(w).Encode(map[string]any{"results": map[string]any{
+						query.RefID: map[string]any{"frames": []any{map[string]any{
+							"schema": map[string]any{"refId": query.RefID, "fields": []any{
+								map[string]any{"name": "Value", "type": "string"},
+							}},
+							"data": map[string]any{"values": []any{
+								[]string{"prod.1-a", "prodX1-a", "prodX2-a"},
+							}},
+						}}},
+					}})
+				}
+			}))
+			defer server.Close()
+			client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			expression := test.regex
+			if expression == "" {
+				expression = `/^$env-/`
+			}
+			variables := []grafana.TemplateVariable{
+				{Name: "env", Type: "custom", Query: json.RawMessage(`"prod.1,prodX1"`), Multi: test.multi},
+				{
+					Name: "ds", Type: "datasource", Query: json.RawMessage(`"prometheus"`), Regex: expression,
+				},
+				{
+					Name: "host", Type: "query", Refresh: 1,
+					Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+					Query:      json.RawMessage(`"query_result(up)"`), Regex: expression,
+				},
+			}
+			options, _, err := client.ResolveVariableOptionsWithState(
+				t.Context(), variables, grafana.TimeRange{From: "now-1h", To: "now"},
+				map[string]string{"env": test.selection}, true, nil,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, test.wantDS, options["ds"])
+			assert.Equal(t, test.wantHost, options["host"])
+		})
+	}
+}
+
 func TestQueryLabelValuesIncludesTimeRange(t *testing.T) {
 	t.Parallel()
 

@@ -155,7 +155,7 @@ func (c *Client) resolveVariableOptions(
 					return nil, nil, fmt.Errorf("listing datasources: %w", err)
 				}
 			}
-			opts = datasourceVariableOptions(variable, datasources)
+			opts = datasourceVariableOptions(variable, datasources, variables, defaults)
 			current = resolveDatasourceSelection(current, datasources)
 		case variableTypeInterval:
 			opts = intervalVariableOptions(variable)
@@ -292,9 +292,11 @@ func parseCustomVariableOptions(v TemplateVariable) []string {
 func datasourceVariableOptions(
 	variable TemplateVariable,
 	datasources []datasourceInfo,
+	variables []TemplateVariable,
+	resolved map[string]string,
 ) []string {
 	wantedType := strings.Trim(queryDefinition(variable), `"`)
-	matcher := compileVariableRegex(variable.Regex)
+	matcher := compileVariableRegex(resolveVariableRegex(variable.Regex, variables, resolved))
 	options := make([]string, 0, len(datasources))
 
 	for _, datasource := range datasources {
@@ -692,7 +694,7 @@ func finishVariableOptions(
 	variables []TemplateVariable,
 	resolved map[string]string,
 ) []string {
-	matcher := compileVariableRegex(ResolveVariables(variable.Regex, variables, resolved))
+	matcher := compileVariableRegex(resolveVariableRegex(variable.Regex, variables, resolved))
 	seen := make(map[string]bool, len(values))
 	options := make([]string, 0, len(values))
 
@@ -710,6 +712,27 @@ func finishVariableOptions(
 	sortVariableOptions(options, variable.Sort)
 
 	return options
+}
+
+func resolveVariableRegex(
+	expression string,
+	variables []TemplateVariable,
+	resolved map[string]string,
+) string {
+	known := make(map[string]bool, len(variables))
+	for _, variable := range variables {
+		known[variable.Name] = true
+	}
+	withRegexFormat := variablePattern.ReplaceAllStringFunc(expression, func(match string) string {
+		name, format := variableReference(match)
+		if format != "" || !known[name] {
+			return match
+		}
+
+		return "${" + name + ":" + valueConditionRegex + "}"
+	})
+
+	return ResolveVariables(withRegexFormat, variables, resolved)
 }
 
 func compileVariableRegex(expression string) *regexp.Regexp {
