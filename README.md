@@ -21,9 +21,9 @@ Screenshots use public, synthetic, or redacted data. Private instance, cluster, 
 - Grafana's 24-column grid with vertical scrolling and panel zoom.
 - Classic dashboards and dashboard.grafana.app v2 resources with GridLayout, RowsLayout, AutoGrid, stacked/repeated Tabs, and library-panel expansion.
 - Horizontal and vertical repeated panels, repeated rows, and responsive terminal wrapping.
-- Datasource, custom, constant, textbox, interval, switch, `label_values`, and `query_result` variables, including multi-select and All, plus datasource-native `queryType` variables.
+- Datasource, custom, constant, textbox, interval, switch, `label_values`, and `query_result` variables, including dependent query/datasource variables, escaped regex filtering, multi-select, and All, plus datasource-native `queryType` variables.
 - Grafana `/api/ds/query` requests that preserve instant/range and datasource-specific target fields.
-- DataFrame joins, selective label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `sortBy`, `merge`, and binary, unary, cumulative, window, and row calculations.
+- DataFrame joins, selective label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `groupBy`, `formatTime`, `sortBy`, `merge`, and binary, unary, cumulative, window, and row calculations.
 - Read-only alert-list panels with list/stat views, custom label grouping, current-state filters, folders, instance labels, and legacy API fallback.
 - Stat, table, time-series, bar, and latitude/longitude or geohash geomap rendering with compact datasource-generated names.
 - Shared field mappings, thresholds, units, decimals, overrides, datasource display names, timestamp formatting, and no-value handling.

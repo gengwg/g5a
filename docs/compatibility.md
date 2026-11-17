@@ -36,6 +36,8 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 | Dashboard schema v2 | GridLayout and RowsLayout supported; datasource, query, custom, constant, textbox, interval, and switch variables |
 | Interval Auto | Supported with `auto_min` and `auto_count`, including dependent variables and legacy Auto selections |
 
+Query and datasource regexes interpolate with Grafana's regex formatter: single values are escaped, multi-value selections become escaped alternations, and explicit formats such as `:raw` are preserved. Patterns without a capture group keep the whole value; a first capture group extracts that group. Regex-only dependencies refresh on selection edits.
+
 ## Repeated panels and layout
 
 - Classic `gridPos` layout on a 24-column grid.
