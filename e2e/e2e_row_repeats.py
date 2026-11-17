@@ -187,6 +187,8 @@ try:
     queries = [query for request in requests for query in request["queries"]]
     assert any(query.get("refId") == "vars" and query.get("expr") == 'up{env="dev"}' for query in queries)
     assert any(query.get("refId") == "A" and query.get("expr") == "dev-a" for query in queries)
+    assert any(query.get("refId") == "B" and query.get("expr") == "dev-a" for query in queries)
+    assert sum(query.get("refId") == "vars" and query.get("expr") == "up" for query in queries) == 2
     print("variable edit refreshes dependent options and panel query: OK")
 finally:
     server.terminate()

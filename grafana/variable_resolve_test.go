@@ -614,6 +614,71 @@ func TestResolveVariableOptionsWithChangesRefetchesDatasourceDependents(t *testi
 	}
 }
 
+func TestResolveVariableOptionsWithChangesInterpolatesRegexAndRefetchesDependents(t *testing.T) {
+	t.Parallel()
+
+	var expressions []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/datasources" {
+			_, _ = w.Write([]byte(`[{"uid":"prom1","name":"Prometheus","type":"prometheus"}]`))
+			return
+		}
+		var request struct {
+			Queries []struct {
+				RefID string `json:"refId"`
+				Expr  string `json:"expr"`
+			} `json:"queries"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decoding query: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, query := range request.Queries {
+			expressions = append(expressions, query.Expr)
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": map[string]any{
+				query.RefID: map[string]any{"frames": []any{map[string]any{
+					"schema": map[string]any{"refId": query.RefID, "fields": []any{
+						map[string]any{"name": "Value", "type": "string"},
+					}},
+					"data": map[string]any{"values": []any{
+						[]string{"prod-a", "dev-a", "prod-b", "dev-b"},
+					}},
+				}}},
+			}})
+		}
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	variables := []grafana.TemplateVariable{
+		{Name: "location", Type: "custom", Query: json.RawMessage(`"prod,dev"`)},
+		{
+			Name: "host", Type: "query", Refresh: 1,
+			Datasource: &grafana.DatasourceRef{UID: "prom1", Type: "prometheus"},
+			Query:      json.RawMessage(`"query_result(up)"`),
+			Regex:      `/^$location-/`,
+			Current:    grafana.TemplateVariableCurrent{Value: json.RawMessage(`"prod-a"`)},
+		},
+	}
+	options, defaults, err := client.ResolveVariableOptionsWithState(
+		t.Context(), variables, grafana.TimeRange{From: "now-1h", To: "now"}, nil, true, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"prod-a", "prod-b"}, options["host"])
+	assert.Equal(t, "prod-a", defaults["host"])
+
+	options, defaults, err = client.ResolveVariableOptionsWithChanges(
+		t.Context(), variables, grafana.TimeRange{From: "now-1h", To: "now"},
+		map[string]string{"location": "dev"}, false, options,
+		map[string]bool{"location": true},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dev-a", "dev-b"}, options["host"])
+	assert.Equal(t, "dev-a", defaults["host"])
+	assert.Equal(t, []string{"up", "up"}, expressions)
+}
+
 func TestQueryLabelValuesIncludesTimeRange(t *testing.T) {
 	t.Parallel()
 

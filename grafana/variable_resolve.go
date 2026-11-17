@@ -231,7 +231,7 @@ func queryVariableDependsOn(
 		return true
 	}
 
-	return textReferencesChangedVariable(variable.Definition+"\n"+string(variable.Query), changed)
+	return textReferencesChangedVariable(variable.Definition+"\n"+string(variable.Query)+"\n"+variable.Regex, changed)
 }
 
 func textReferencesChangedVariable(text string, changed map[string]bool) bool {
@@ -415,7 +415,7 @@ func (c *Client) fetchQueryVariableOptions(
 		if err != nil {
 			return nil, err
 		}
-		return finishVariableOptions(values, variable), nil
+		return finishVariableOptions(values, variable, variables, resolved), nil
 	}
 
 	if queryType := datasourceQueryType(variable); queryType != "" {
@@ -437,7 +437,7 @@ func (c *Client) fetchQueryVariableOptions(
 		if err != nil {
 			return nil, err
 		}
-		return finishVariableOptions(variableOptionsFromFrames(result), variable), nil
+		return finishVariableOptions(variableOptionsFromFrames(result), variable, variables, resolved), nil
 	}
 
 	expression := query
@@ -469,7 +469,7 @@ func (c *Client) fetchQueryVariableOptions(
 	}
 
 	values := variableOptionsFromFrames(result)
-	return finishVariableOptions(values, variable), nil
+	return finishVariableOptions(values, variable, variables, resolved), nil
 }
 
 //nolint:cyclop // label_values parsing handles nested selectors and quoted delimiters
@@ -689,8 +689,10 @@ func fieldLabelText(field DataFrameField) string {
 func finishVariableOptions(
 	values []string,
 	variable TemplateVariable,
+	variables []TemplateVariable,
+	resolved map[string]string,
 ) []string {
-	matcher := compileVariableRegex(variable.Regex)
+	matcher := compileVariableRegex(ResolveVariables(variable.Regex, variables, resolved))
 	seen := make(map[string]bool, len(values))
 	options := make([]string, 0, len(values))
 
@@ -738,7 +740,7 @@ func applyVariableRegex(matcher *regexp.Regexp, value string) []string {
 		return []string{matches[1]}
 	}
 
-	return []string{matches[0]}
+	return []string{value}
 }
 
 func sortVariableOptions(options []string, mode int) {

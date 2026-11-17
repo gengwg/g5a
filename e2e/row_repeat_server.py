@@ -371,14 +371,29 @@ DEPENDENT_DASHBOARD = {
             "query": "query_result(up{env=\"$env\"})", "current": {"value": "prod-a"},
             "options": [],
         },
+        {
+            "name": "host", "type": "query", "refresh": 1,
+            "datasource": {"uid": "prom1", "type": "prometheus"},
+            "query": "query_result(up)", "regex": "/^$env-/", "current": {"value": "prod-a"},
+            "options": [],
+        },
     ]},
-    "panels": [{
-        "id": 59, "type": "stat", "title": "$instance",
-        "datasource": {"uid": "prom1", "type": "prometheus"},
-        "targets": [{"refId": "A", "expr": "$instance", "instant": True, "range": False,
-                     "datasource": {"uid": "prom1", "type": "prometheus"}}],
-        "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
-    }],
+    "panels": [
+        {
+            "id": 59, "type": "stat", "title": "$instance",
+            "datasource": {"uid": "prom1", "type": "prometheus"},
+            "targets": [{"refId": "A", "expr": "$instance", "instant": True, "range": False,
+                         "datasource": {"uid": "prom1", "type": "prometheus"}}],
+            "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+        },
+        {
+            "id": 60, "type": "stat", "title": "$host",
+            "datasource": {"uid": "prom1", "type": "prometheus"},
+            "targets": [{"refId": "B", "expr": "$host", "instant": True, "range": False,
+                         "datasource": {"uid": "prom1", "type": "prometheus"}}],
+            "gridPos": {"x": 0, "y": 4, "w": 24, "h": 4},
+        },
+    ],
 }
 
 
@@ -534,7 +549,12 @@ class Handler(BaseHTTPRequestHandler):
         for query in payload["queries"]:
             if query["refId"] == "vars":
                 expression = query.get("expr", "")
-                if expression in ('up{env="prod"}', 'up{env="dev"}'):
+                if expression == "up":
+                    results["vars"] = {"frames": [{
+                        "schema": {"refId": "vars", "fields": [{"name": "Value", "type": "string"}]},
+                        "data": {"values": [["prod-a", "dev-a", "prod-b", "dev-b"]]},
+                    }]}
+                elif expression in ('up{env="prod"}', 'up{env="dev"}'):
                     prefix = "prod" if expression == 'up{env="prod"}' else "dev"
                     results["vars"] = {"frames": [{
                         "schema": {"refId": "vars", "fields": [{"name": "Value", "type": "string"}]},

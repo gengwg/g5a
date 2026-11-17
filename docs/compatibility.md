@@ -29,7 +29,7 @@ Legacy timeseries targets without explicit `instant` or `range` fields default t
 | `query_result` and raw instant queries | Supported |
 | Datasource-native `queryType` variables (for example Incident `labels`/`severities`) | Supported |
 | Dependent variables | Resolved in dashboard order; selection edits refresh direct and transitive query/datasource dependencies |
-| Regex extraction | Supported, including the first capture group |
+| Regex extraction | Supported, including interpolation, filtering without a capture group, and the first capture group |
 | Multi-value and All | Supported, including repeat expansion |
 | Raw, pipe, regex, CSV, JSON, query-param formatting | Supported |
 | Saved multi-value selections | Supported |
