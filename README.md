@@ -2,18 +2,19 @@
 
 [![License](https://img.shields.io/github/license/gengwg/g5a)](https://github.com/gengwg/g5a/blob/main/LICENSE)
 [![Test](https://github.com/gengwg/g5a/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/gengwg/g5a/actions/workflows/test.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/gengwg/g5a)](https://goreportcard.com/report/github.com/gengwg/g5a)
 
 `g5a` is a read-only terminal UI for live Grafana dashboards. It connects to an existing Grafana instance, expands variables and repeated panels, queries through Grafana, and renders a responsive grid with stats, tables, and Braille time-series charts. It works over SSH and is licensed under MIT.
 
 The name is a numeronym for **Grafana**: `g + 5 letters + a`, in the same style as `k8s` and `o11y`.
+
+![g5a filtering, opening, zooming, and scrolling a public Grafana Play dashboard](docs/images/demo.gif)
 
 ![Public Grafana Play dashboard browser](docs/images/public-dashboard-list.png)
 ![Public synthetic service health dashboard](docs/images/public-demo-grid.png)
 ![Public synthetic storage IOPS dashboard](docs/images/public-iops-demo.png)
 ![Redacted cluster and node bandwidth dashboard](docs/images/redacted-bandwidth-demo.png)
 
-Screenshots use public, synthetic, or redacted data. Private instance, cluster, and host identifiers are removed.
+The demo and screenshots use public, synthetic, or redacted data. Private instance, cluster, and host identifiers are removed.
 
 ## Features
 
