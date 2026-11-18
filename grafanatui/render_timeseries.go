@@ -85,6 +85,7 @@ func (r *timeSeriesRenderer) Render(
 	if pointCount == 0 {
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, "no time series data")
 	}
+	padYLabels(&chart)
 	styleTimeSeriesDataSets(&chart, seriesNames)
 	chart.DrawBrailleAll()
 
@@ -156,6 +157,27 @@ func unitLabelFormatter(unit string) linechart.LabelFormatter {
 
 		return fmt.Sprintf("%.2g", value)
 	}
+}
+
+// padYLabels pads every Y label to the wider of the bottom and top labels.
+// ntcharts sizes the label column from every yStep-th row but always draws the
+// top row, so when the graph height is not a multiple of yStep a wider top
+// label lost its first characters ("100.0%" drawn as "00.0%"). Widths are in
+// bytes because ntcharts positions labels by len.
+func padYLabels(chart *timeserieslinechart.Model) {
+	format := chart.YLabelFormatter
+	width := max(
+		len(format(0, chart.ViewMinY())),
+		len(format(chart.GraphHeight(), chart.ViewMaxY())),
+	)
+	chart.YLabelFormatter = func(index int, value float64) string {
+		label := format(index, value)
+
+		return strings.Repeat(" ", max(width-len(label), 0)) + label
+	}
+	chart.UpdateGraphSizes()
+	// Re-applying the view range rescales the data to the narrower graph.
+	chart.SetViewYRange(chart.ViewMinY(), chart.ViewMaxY())
 }
 
 // timeSeriesEntry holds timestamps, values, and presentation for one series.

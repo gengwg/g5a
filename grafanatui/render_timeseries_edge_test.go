@@ -55,3 +55,30 @@ func TestTimeSeriesRenderer_DegenerateInputs(t *testing.T) {
 		})
 	}
 }
+
+// The top Y label is often the widest ("100.0%" above "85.7%") and must not
+// lose characters at any panel height.
+func TestTimeSeriesRenderer_TopYLabelNotClipped(t *testing.T) {
+	t.Parallel()
+
+	result := &grafana.QueryResult{Results: map[string]grafana.QueryResultData{
+		"A": {Frames: []grafana.DataFrame{{
+			Schema: grafana.DataFrameSchema{Fields: []grafana.DataFrameField{
+				{Name: "Time", Type: "time"},
+				{Name: "Value", Type: "number"},
+			}},
+			Data: grafana.DataFrameData{Values: []json.RawMessage{
+				mustMarshalJSON([]int64{1000, 2000, 3000}),
+				mustMarshalJSON([]float64{0, 0.5, 1}),
+			}},
+		}}},
+	}}
+	panel := grafana.Panel{FieldConfig: json.RawMessage(`{"defaults":{"unit":"percentunit"}}`)}
+
+	for height := 6; height <= 15; height++ {
+		output := grafanatui.RendererForPanel("timeseries").Render(result, panel, 40, height, nil)
+		if !strings.Contains(output, "100.0%") {
+			t.Errorf("height %d: top Y label clipped:\n%s", height, output)
+		}
+	}
+}

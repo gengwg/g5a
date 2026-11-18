@@ -111,6 +111,10 @@ func formatValue(value float64, unit string, decimals *int) string {
 		return formatter(value, decimals)
 	}
 
+	if formatter, ok := catalogUnitFormatters[unit]; ok {
+		return formatter(value, decimals)
+	}
+
 	return formatCustomUnit(value, unit, decimals)
 }
 
@@ -131,18 +135,23 @@ func formatCustomUnit(value float64, unit string, decimals *int) string {
 }
 
 func formatCountUnit(value float64, unit string, decimals *int) string {
-	suffix := " " + unit
+	return formatCountScaled(value, decimals) + " " + unit
+}
+
+// formatCountScaled scales with Grafana's count and currency suffixes, which
+// use B for billions instead of the SI G.
+func formatCountScaled(value float64, decimals *int) string {
 	switch absolute := math.Abs(value); {
 	case absolute >= 1e12:
-		return formatUnitNumber(value/1e12, "T"+suffix, decimals)
+		return formatUnitNumber(value/1e12, "T", decimals)
 	case absolute >= 1e9:
-		return formatUnitNumber(value/1e9, "B"+suffix, decimals)
+		return formatUnitNumber(value/1e9, "B", decimals)
 	case absolute >= 1e6:
-		return formatUnitNumber(value/1e6, "M"+suffix, decimals)
+		return formatUnitNumber(value/1e6, "M", decimals)
 	case absolute >= 1e3:
-		return formatUnitNumber(value/1e3, "K"+suffix, decimals)
+		return formatUnitNumber(value/1e3, "K", decimals)
 	default:
-		return formatRawNumber(value, decimals) + suffix
+		return formatRawNumber(value, decimals)
 	}
 }
 

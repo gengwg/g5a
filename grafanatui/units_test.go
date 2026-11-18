@@ -106,6 +106,43 @@ func TestFormatValue(t *testing.T) {
 	}
 }
 
+// Grafana catalog unit IDs must render as their symbols, never as the raw ID.
+func TestFormatValueGrafanaCatalogUnits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		value    float64
+		unit     string
+		expected string
+	}{
+		{name: "currency prefix", value: 91.22, unit: "currencyUSD", expected: "$91.22"},
+		{name: "currency scaled", value: 105042, unit: "currencyUSD", expected: "$105.0K"},
+		{name: "currency negative", value: -5, unit: "currencyUSD", expected: "-$5"},
+		{name: "currency suffix", value: 1500, unit: "currencySEK", expected: "1.5Kkr"},
+		{name: "fixed suffix", value: 32.71, unit: "rotrpm", expected: "32.71 rpm"},
+		{name: "SI base", value: 0.5, unit: "volt", expected: "500.0 mV"},
+		{name: "SI offset", value: 1500, unit: "kwatth", expected: "1.5 MWh"},
+		{name: "SI negative offset", value: 1500, unit: "mvolt", expected: "1.5 V"},
+		{name: "SI zero", value: 0, unit: "lengthm", expected: "0.0 m"},
+		{name: "count", value: 1500, unit: "cps", expected: "1.5K c/s"},
+		{name: "count small", value: 1, unit: "cps", expected: "1 c/s"},
+		{name: "binary offset", value: 1536, unit: "kbytes", expected: "1.5 MiB"},
+		{name: "binary below scale", value: 512, unit: "kbytes", expected: "512.0 KiB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := grafanatui.FormatValue(tt.value, tt.unit)
+			if got != tt.expected {
+				t.Errorf("FormatValue(%v, %q) = %q, want %q", tt.value, tt.unit, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestExtractUnit(t *testing.T) {
 	t.Parallel()
 
