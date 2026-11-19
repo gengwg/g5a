@@ -27,6 +27,7 @@ const (
 	calcCount        = "count"
 	timeNow          = "now"
 	timeFifteenMins  = "now-15m"
+	timeSixHours     = "now-6h"
 	defaultTimeFrom  = "now-1h"
 	panelTypeStat    = "stat"
 	mappingTypeValue = "value"

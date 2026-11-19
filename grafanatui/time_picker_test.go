@@ -13,7 +13,7 @@ func TestSetTimeRangePreservesDashboardSettings(t *testing.T) {
 	current := grafana.TimeRange{
 		From: "now/d", To: "now/d", Timezone: "UTC", WeekStart: "saturday", NowDelay: "1h",
 	}
-	next := grafana.TimeRange{From: "now-6h", To: "now", Timezone: "", WeekStart: "", NowDelay: ""}
+	next := grafana.TimeRange{From: timeSixHours, To: "now", Timezone: "", WeekStart: "", NowDelay: ""}
 
 	dashboard := newDashboardView(nil, "fixture")
 	dashboard.timeRange = current

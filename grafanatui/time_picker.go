@@ -24,7 +24,7 @@ func getTimePresets() []timePreset {
 		{label: "Last 5 minutes", from: "now-5m", to: timeNow},
 		{label: "Last 15 minutes", from: timeFifteenMins, to: timeNow},
 		{label: "Last 1 hour", from: defaultTimeFrom, to: timeNow},
-		{label: "Last 6 hours", from: "now-6h", to: timeNow},
+		{label: "Last 6 hours", from: timeSixHours, to: timeNow},
 		{label: "Last 24 hours", from: "now-24h", to: timeNow},
 		{label: "Last 7 days", from: "now-7d", to: timeNow},
 	}

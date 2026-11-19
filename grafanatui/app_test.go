@@ -12,7 +12,7 @@ import (
 func TestZoomedPanelTimeRangeAppliesToDashboardOnReturn(t *testing.T) {
 	t.Parallel()
 
-	sixHours := grafana.TimeRange{From: "now-6h", To: "now"}
+	sixHours := grafana.TimeRange{From: timeSixHours, To: "now"}
 	dayRange := grafana.TimeRange{From: "now-24h", To: "now"}
 
 	dashboard := newDashboardView(nil, "fixture")
