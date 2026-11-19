@@ -153,38 +153,135 @@ func expandRepeatedRows(
 	instances := make([]PanelInstance, 0, len(panels))
 	yOffset := 0
 	for groupIndex, group := range groups {
-		values, variable, repeated := rowRepeatValues(
-			group.row, variableByName, options, selections,
-		)
-		if len(values) == 0 {
-			continue
+		expanded, height := expandRowGroup(group, variableByName, options, selections)
+		for index := range expanded {
+			expanded[index].Panel.GridPos.Y += yOffset
+			expanded[index].Key = "group-" + strconv.Itoa(groupIndex) + ":" + expanded[index].Key
 		}
-		groupOffset := 0
-		for _, value := range values {
-			rowSelections := cloneStrings(selections)
-			if repeated {
-				rowSelections[variable.Name] = value
-			}
-			expanded := expandPanelRepeats(
-				group.panels, variables, options, rowSelections,
-			)
-			height := expandedGroupHeight(group, expanded)
-			for index := range expanded {
-				expanded[index].Panel.GridPos.Y += yOffset + groupOffset
-				expanded[index].Key = "group-" + strconv.Itoa(groupIndex) + ":" + expanded[index].Key
-				if repeated {
-					expanded[index].Key = group.row.key + ":" + value + ":" + expanded[index].Key
-				}
-			}
-			instances = append(instances, expanded...)
-			groupOffset += height
-		}
-		if groupOffset > 0 {
-			yOffset += groupOffset - group.height
+		instances = append(instances, expanded...)
+		if height > 0 {
+			yOffset += height - group.height
 		}
 	}
 
 	return instances
+}
+
+func expandRowGroup(
+	group panelExpansionGroup,
+	variableByName map[string]TemplateVariable,
+	options map[string][]string,
+	selections map[string]string,
+) ([]PanelInstance, int) {
+	values, variable, repeated := rowRepeatValues(group.row, variableByName, options, selections)
+	if len(values) == 0 {
+		return nil, 0
+	}
+	instances := make([]PanelInstance, 0, len(group.panels))
+	groupOffset := 0
+	for _, value := range values {
+		rowSelections := cloneStrings(selections)
+		if repeated {
+			rowSelections[variable.Name] = value
+		}
+		expanded, heightOffset := expandRowGroupValue(group, variableByName, options, rowSelections)
+		height := group.height + heightOffset
+		for index := range expanded {
+			expanded[index].Panel.GridPos.Y += groupOffset
+			if repeated {
+				expanded[index].Key = group.row.key + ":" + value + ":" + expanded[index].Key
+			}
+		}
+		instances = append(instances, expanded...)
+		groupOffset += height
+	}
+
+	return instances, groupOffset
+}
+
+//nolint:cyclop // direct leaves and nested child groups share one ordered layout pipeline
+func expandRowGroupValue(
+	group panelExpansionGroup,
+	variableByName map[string]TemplateVariable,
+	options map[string][]string,
+	selections map[string]string,
+) ([]PanelInstance, int) {
+	variables := make([]TemplateVariable, 0, len(variableByName))
+	for _, variable := range variableByName {
+		variables = append(variables, variable)
+	}
+	direct := make([]Panel, 0, len(group.panels))
+	nested := make([]Panel, 0, len(group.panels))
+	for _, panel := range group.panels {
+		if group.row != nil && group.row.parent == nil && panel.row == group.row {
+			direct = append(direct, panel)
+		} else {
+			nested = append(nested, panel)
+		}
+	}
+	if group.row == nil || len(nested) == 0 {
+		expanded := expandPanelRepeats(group.panels, variables, options, selections)
+		return expanded, expandedGroupHeight(group, expanded) - group.height
+	}
+
+	instances := make([]PanelInstance, 0, len(group.panels))
+	childOffset := 0
+	if len(direct) > 0 {
+		expanded, height := expandDirectPanels(direct, variables, options, selections, group.baseY)
+		instances = append(instances, expanded...)
+		childOffset += height
+	}
+
+	childGroups := groupPanelsAtRow(nested)
+	for _, child := range childGroups {
+		expanded, height := expandRowGroup(child, variableByName, options, selections)
+		for index := range expanded {
+			expanded[index].Panel.GridPos.Y += childOffset
+		}
+		instances = append(instances, expanded...)
+		if height > 0 {
+			childOffset += height - child.height
+		}
+	}
+
+	return instances, childOffset
+}
+
+func expandDirectPanels(
+	panels []Panel,
+	variables []TemplateVariable,
+	options map[string][]string,
+	selections map[string]string,
+	baseY int,
+) ([]PanelInstance, int) {
+	group := panelExpansionGroup{row: nil, panels: panels, baseY: baseY, height: 0}
+	bottom := baseY
+	for _, panel := range panels {
+		bottom = max(bottom, panel.GridPos.Y+panel.GridPos.H)
+	}
+	height := max(0, bottom-baseY)
+	expanded := expandPanelRepeats(panels, variables, options, selections)
+
+	return expanded, expandedGroupHeight(group, expanded) - height
+}
+
+func groupPanelsAtRow(panels []Panel) []panelExpansionGroup {
+	groups := make([]panelExpansionGroup, 0, len(panels))
+	for _, panel := range panels {
+		if panel.row == nil || panel.row.parent == nil {
+			continue
+		}
+		childRow := panel.row.parent
+		if len(groups) == 0 || groups[len(groups)-1].row.key != childRow.key {
+			groups = append(groups, panelExpansionGroup{
+				row: childRow, panels: nil, baseY: childRow.baseY, height: childRow.height,
+			})
+		}
+		panel.row = childRow
+		groups[len(groups)-1].panels = append(groups[len(groups)-1].panels, panel)
+	}
+
+	return groups
 }
 
 func groupPanelsForExpansion(panels []Panel) []panelExpansionGroup {
@@ -203,7 +300,8 @@ func groupPanelsForExpansion(panels []Panel) []panelExpansionGroup {
 			})
 			continue
 		}
-		if len(groups) == 0 || groups[len(groups)-1].row != panel.row {
+		if len(groups) == 0 || groups[len(groups)-1].row == nil || panel.row == nil ||
+			groups[len(groups)-1].row.key != panel.row.key {
 			groups = append(groups, panelExpansionGroup{
 				row: panel.row, panels: nil, baseY: panel.row.baseY, height: panel.row.height,
 			})

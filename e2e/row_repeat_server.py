@@ -77,6 +77,62 @@ V2 = {
 }
 
 
+NESTED_PANEL = copy.deepcopy(PANEL)
+NESTED_PANEL["title"] = "$cluster/$node"
+NESTED_PANEL["targets"][0]["expr"] = "$node"
+NESTED_FOLLOWING = copy.deepcopy(FOLLOWING)
+NESTED_FOLLOWING["title"] = "Following $cluster"
+V2_NESTED = {
+    "apiVersion": "dashboard.grafana.app/v2",
+    "spec": {
+        "title": "V2 nested repeats",
+        "timeSettings": {"from": "now-1h", "to": "now", "autoRefresh": False},
+        "elements": {
+            "panel-30": v2_panel(NESTED_PANEL),
+            "panel-32": v2_panel(NESTED_FOLLOWING),
+        },
+        "layout": {"kind": "RowsLayout", "spec": {"rows": [
+            {"kind": "RowsLayoutRow", "spec": {
+                "repeat": {"mode": "variable", "value": "cluster"},
+                "layout": {"kind": "RowsLayout", "spec": {"rows": [
+                    {"kind": "RowsLayoutRow", "spec": {
+                        "repeat": {"mode": "variable", "value": "node"},
+                        "layout": {"kind": "GridLayout", "spec": {
+                            "items": [v2_layout_item(NESTED_PANEL)],
+                        }},
+                    }},
+                    {"kind": "RowsLayoutRow", "spec": {
+                        "layout": {"kind": "GridLayout", "spec": {
+                            "items": [v2_layout_item(FOLLOWING)],
+                        }},
+                    }},
+                ]}},
+            }},
+        ]}},
+        "variables": [
+            {"kind": "CustomVariable", "spec": {
+                "name": "cluster", "query": "alpha,beta",
+                "current": {"text": ["All"], "value": ["$__all"]},
+                "options": [
+                    {"text": ["alpha"], "value": ["alpha"]},
+                    {"text": ["beta"], "value": ["beta"]},
+                ],
+                "multi": True, "includeAll": True,
+            }},
+            {"kind": "CustomVariable", "spec": {
+                "name": "node", "query": "x,y",
+                "current": {"text": ["All"], "value": ["$__all"]},
+                "options": [
+                    {"text": ["x"], "value": ["x"]},
+                    {"text": ["y"], "value": ["y"]},
+                ],
+                "multi": True, "includeAll": True,
+            }},
+        ],
+    },
+}
+
+
 SWITCH_PANEL = copy.deepcopy(PANEL)
 SWITCH_PANEL["title"] = "$switch"
 SWITCH_PANEL["targets"][0]["expr"] = "$switch"
@@ -527,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
             }]}})
         elif self.path == "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/v2rowrepeat":
             self.send_json(V2)
+        elif self.path == "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/v2nested":
+            self.send_json(V2_NESTED)
         elif self.path == "/apis/dashboard.grafana.app/v2/namespaces/default/dashboards/v2switch":
             self.send_json(V2_SWITCH)
         elif self.path == "/api/datasources":
@@ -609,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             if cluster in ("versionA", "versionB"):
                 cluster = "alpha"
-            value = {"alpha": 11, "beta": 22, "on": 42, "prod": 42, "dev": 99, "prod-a": 11, "dev-a": 22, "(alpha|beta)": 42, "temperature": 11.3, "wind": 100.8, "capacity": 340024}.get(cluster, 99)
+            value = {"alpha": 11, "beta": 22, "x": 11, "y": 22, "on": 42, "prod": 42, "dev": 99, "prod-a": 11, "dev-a": 22, "(alpha|beta)": 42, "temperature": 11.3, "wind": 100.8, "capacity": 340024}.get(cluster, 99)
             results[query["refId"]] = {"frames": [frame(query["refId"], value, cluster)]}
         self.send_json({"results": results})
 

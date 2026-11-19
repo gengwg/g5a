@@ -20,7 +20,7 @@ Screenshots use public, synthetic, or redacted data. Private instance, cluster, 
 - Dashboard search and direct dashboard/panel URLs.
 - Grafana's 24-column grid with vertical scrolling and panel zoom.
 - Classic dashboards and dashboard.grafana.app v2 resources with GridLayout, RowsLayout, AutoGrid, stacked/repeated Tabs, and library-panel expansion.
-- Horizontal and vertical repeated panels, repeated rows, and responsive terminal wrapping.
+- Horizontal and vertical repeated panels, repeated rows, nested RowsLayout repeats, and responsive terminal wrapping.
 - Datasource, custom, constant, textbox, interval, switch, `label_values`, and `query_result` variables, including dependent query/datasource variables, escaped regex filtering, multi-select, and All, plus datasource-native `queryType` variables.
 - Grafana `/api/ds/query` requests that preserve instant/range and datasource-specific target fields.
 - DataFrame joins, selective label expansion, filtering, organization, reduction, type conversion, `groupingToMatrix`, `groupBy`, `formatTime`, `sortBy`, `merge`, and binary, unary, cumulative, window, and row calculations.
@@ -40,17 +40,17 @@ Download an archive from the [latest release](https://github.com/gengwg/g5a/rele
 
 | Platform | amd64 | arm64 |
 |----------|-------|-------|
-| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_linux_arm64.tar.gz) |
-| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_darwin_arm64.tar.gz) |
-| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_windows_arm64.zip) |
+| Linux | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_linux_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_linux_arm64.tar.gz) |
+| macOS | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_darwin_amd64.tar.gz) | [tar.gz](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_darwin_arm64.tar.gz) |
+| Windows | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_windows_amd64.zip) | [zip](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_windows_arm64.zip) |
 
-Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/checksums.txt), then extract and run it. For example, on Linux amd64:
+Verify the archive against [checksums.txt](https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/checksums.txt), then extract and run it. For example, on Linux amd64:
 
 ```sh
-curl -fLO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/g5a_v0.1.22_linux_amd64.tar.gz
-curl -fLO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.22/checksums.txt
+curl -fLO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/g5a_v0.1.23_linux_amd64.tar.gz
+curl -fLO https://github.com/gengwg/g5a/releases/download/g5a-v0.1.23/checksums.txt
 sha256sum -c --ignore-missing checksums.txt
-tar -xzf g5a_v0.1.22_linux_amd64.tar.gz
+tar -xzf g5a_v0.1.23_linux_amd64.tar.gz
 sudo install -m 0755 g5a /usr/local/bin/g5a
 hash -r
 g5a --url https://play.grafana.org

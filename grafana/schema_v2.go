@@ -21,7 +21,6 @@ var (
 	errV2ElementNotFound    = errors.New("dashboard element not found")
 	errUnsupportedV2Element = errors.New("unsupported dashboard element kind")
 	errInvalidV2Query       = errors.New("invalid dashboard v2 query")
-	errNestedV2RowRepeat    = errors.New("nested dashboard v2 row repeats are not supported")
 	errEmptyCloudNamespace  = errors.New("cloud frontend settings returned an empty namespace")
 )
 
@@ -453,14 +452,12 @@ func (layout dashboardV2Layout) rowsPanels(
 		if len(rowPanels) > 0 {
 			rowGroup := &panelRow{
 				key: fmt.Sprintf("v2-row-%d", rowPanels[0].ID), repeat: "",
-				baseY: yOffset, height: height,
+				baseY: yOffset, height: height, parent: nil,
 			}
 			if row.Spec.Repeat != nil {
 				rowGroup.repeat = row.Spec.Repeat.Value
 			}
-			if err := assignRowGroup(rowPanels, rowGroup); err != nil {
-				return nil, err
-			}
+			assignRowGroup(rowPanels, rowGroup)
 		}
 		panels = append(panels, rowPanels...)
 		yOffset += height
@@ -469,7 +466,7 @@ func (layout dashboardV2Layout) rowsPanels(
 	return panels, nil
 }
 
-func assignRowGroup(panels []Panel, group *panelRow) error {
+func assignRowGroup(panels []Panel, group *panelRow) {
 	for index := range panels {
 		inner := panels[index].row
 		switch {
@@ -477,15 +474,12 @@ func assignRowGroup(panels []Panel, group *panelRow) error {
 			panels[index].row = group
 		case group.repeat == "":
 			// Preserve a nested row's identity when this row only supplies an offset.
-		case inner.repeat != "":
-			return fmt.Errorf("%w: %s", errNestedV2RowRepeat, inner.repeat)
 		default:
-			// A repeating outer row repeats the entire nested, non-repeating layout.
-			panels[index].row = group
+			nested := *group
+			nested.parent = inner
+			panels[index].row = &nested
 		}
 	}
-
-	return nil
 }
 
 func (layout dashboardV2Layout) panelsAtOffset(
@@ -500,8 +494,10 @@ func (layout dashboardV2Layout) panelsAtOffset(
 	offsetRows := make(map[*panelRow]bool)
 	for index := range panels {
 		panels[index].GridPos.Y += yOffset
-		row := panels[index].row
-		if row != nil && !offsetRows[row] {
+		for row := panels[index].row; row != nil; row = row.parent {
+			if offsetRows[row] {
+				break
+			}
 			row.baseY += yOffset
 			offsetRows[row] = true
 		}
@@ -618,15 +614,13 @@ func (layout dashboardV2Layout) tabsPanels(
 		height := 2 + layoutHeight(tab.Spec.Layout)
 		tabGroup := &panelRow{
 			key: fmt.Sprintf("v2-tab-%d", heading.ID), repeat: "",
-			baseY: yOffset, height: height,
+			baseY: yOffset, height: height, parent: nil,
 		}
 		if tab.Spec.Repeat != nil {
 			tabGroup.repeat = tab.Spec.Repeat.Value
 		}
 		groupPanels := append([]Panel{heading}, tabPanels...)
-		if err := assignRowGroup(groupPanels, tabGroup); err != nil {
-			return nil, err
-		}
+		assignRowGroup(groupPanels, tabGroup)
 		panels = append(panels, groupPanels...)
 		yOffset += height
 	}

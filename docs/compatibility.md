@@ -45,7 +45,7 @@ Query and datasource regexes interpolate with Grafana's regex formatter: single 
 - Row repeats with scoped variable values, including repeated panels within repeated rows.
 - `repeatDirection` and `maxPerRow` for panel repeats.
 - Schema v2 GridLayout, RowsLayout, AutoGrid, stacked/repeated Tabs, and library panels are supported.
-- Nested RowsLayout levels that both define repeats return an explicit error; one repeating level is supported.
+- Nested RowsLayout levels are supported with independent variable scopes and following-panel offsets. Reusing the same variable keeps the inner value equal to the outer value.
 - Narrow terminals reduce repeated-panel columns and scroll vertically.
 
 ## Panel types

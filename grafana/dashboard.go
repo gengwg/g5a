@@ -89,6 +89,7 @@ type panelRow struct {
 	repeat string
 	baseY  int
 	height int
+	parent *panelRow
 }
 
 // Transformation represents a single panel data transformation.
@@ -334,6 +335,7 @@ func flattenPanels(panels []Panel, inherited *panelRow, counter *int) []Panel {
 				repeat: panel.Repeat,
 				baseY:  panel.GridPos.Y,
 				height: max(panel.GridPos.H, 1),
+				parent: nil,
 			}
 			result = append(result, flattenPanels(panel.Panels, row, counter)...)
 			if panel.Collapsed {

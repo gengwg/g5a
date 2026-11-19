@@ -21,6 +21,20 @@ try:
         assert "unsupported" not in output.lower(), (uid, output)
         print(f"{uid}: repeated rows, scoped queries, and following panel: OK")
 
+    nested = run_tui(
+        "http://127.0.0.1:18082/d/v2nested",
+        "v2-nested-repro.txt",
+        keys="jjjjjj",
+        key_delay_seconds=0.2,
+    )
+    titles = ["alpha/x", "alpha/y", "beta/x", "beta/y"]
+    positions = [nested.index(title) for title in titles]
+    assert positions == sorted(positions), nested
+    assert "Following alpha" in nested and "Following beta" in nested
+    assert "11" in nested and "22" in nested and "99" in nested
+    assert "unsupported" not in nested.lower()
+    print("v2 nested row repeats preserve scopes and following panels: OK")
+
     switch = run_tui(
         "http://127.0.0.1:18082/d/v2switch",
         "v2-switch-repro.txt",

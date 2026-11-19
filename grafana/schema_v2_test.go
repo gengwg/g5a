@@ -1,3 +1,4 @@
+//nolint:exhaustruct // schema-v2 fixtures vary only the fields relevant to each test
 package grafana_test
 
 import (
@@ -571,10 +572,10 @@ func TestGetDashboardV2NestedRowRepeats(t *testing.T) {
 			innerRepeat: "", wantY: []int{0, 6}, wantError: false,
 		},
 		{
-			name: "multiple levels rejected", wantError: true,
+			name: "multiple levels inherit repeated variable scope", wantError: false,
 			outerRepeat: `"repeat":{"mode":"variable","value":"cluster"},`,
 			innerRepeat: `"repeat":{"mode":"variable","value":"cluster"},`,
-			wantY:       nil,
+			wantY:       []int{0, 6},
 		},
 	}
 	for _, test := range tests {
@@ -613,6 +614,38 @@ func TestGetDashboardV2NestedRowRepeats(t *testing.T) {
 				assert.Equal(t, wantY, instances[index].Panel.GridPos.Y)
 			}
 		})
+	}
+}
+
+func TestGetDashboardV2NestedRowRepeatScopesAndOffsets(t *testing.T) {
+	t.Parallel()
+
+	resource := nestedRepeatScopeResource()
+	server := newV2TestServer(resource)
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	dashboard, err := client.GetDashboard(t.Context(), "demo")
+	require.NoError(t, err)
+	variables := []grafana.TemplateVariable{
+		{Name: "cluster", Multi: true, IncludeAll: true},
+		{Name: "node", Multi: true, IncludeAll: true},
+	}
+	instances := grafana.ExpandPanels(dashboard.Panels, variables,
+		map[string][]string{"cluster": {"a", "b"}, "node": {"x", "y"}},
+		map[string]string{"cluster": "$__all", "node": "$__all"},
+	)
+	require.Len(t, instances, 7)
+	wantY := []int{0, 5, 10, 16, 21, 26, 32}
+	wantCluster := []string{"a", "a", "a", "b", "b", "b", "$__all"}
+	wantNode := []string{"x", "y", "$__all", "x", "y", "$__all", "$__all"}
+	keys := make(map[string]bool, len(instances))
+	for index, instance := range instances {
+		assert.Equal(t, wantY[index], instance.Panel.GridPos.Y)
+		assert.Equal(t, wantCluster[index], instance.Variables["cluster"])
+		assert.Equal(t, wantNode[index], instance.Variables["node"])
+		assert.False(t, keys[instance.Key], "duplicate instance key %q", instance.Key)
+		keys[instance.Key] = true
 	}
 }
 
