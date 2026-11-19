@@ -282,6 +282,7 @@ func (a *App) handlePopView() (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 	}
 
+	popped := a.views[len(a.views)-1]
 	a.views = a.views[:len(a.views)-1]
 
 	top := a.views[len(a.views)-1]
@@ -293,6 +294,11 @@ func (a *App) handlePopView() (tea.Model, tea.Cmd) {
 	case *dashboardView:
 		if current.dashboard == nil {
 			return a, current.Init()
+		}
+		// A zoomed panel shares its dashboard's time range, so a range picked
+		// while zoomed applies to the grid on return.
+		if panel, ok := popped.(*panelView); ok && panel.uid == current.uid && panel.timeRange != current.timeRange {
+			return a.handleSetTimeRange(setTimeRangeMsg{timeRange: panel.timeRange})
 		}
 	}
 
