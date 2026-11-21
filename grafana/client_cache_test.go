@@ -144,6 +144,33 @@ func TestResolveDatasourceUIDSharedFailureAllowsOneRetry(t *testing.T) {
 	}
 }
 
+func TestResolveDatasourceUIDReleasesFlightAfterPanic(t *testing.T) {
+	t.Parallel()
+
+	transport := cacheRoundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+		panic("test transport panic")
+	})
+	client, err := NewClient(
+		"https://grafana.example.com",
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		client.ResolveDatasourceUID(t.Context(), "shared", "")
+	}()
+	if client.dsFetchInFlight {
+		t.Fatal("datasource fetch remained in flight after panic")
+	}
+	select {
+	case <-client.dsFetchDone:
+	default:
+		t.Fatal("datasource waiters were not released after panic")
+	}
+}
+
 func TestResolveDatasourceUIDCancellationDoesNotBackoff(t *testing.T) {
 	t.Parallel()
 

@@ -26,6 +26,20 @@ func TestResolveURLRejectsNonRelativeReferences(t *testing.T) {
 	}
 }
 
+func TestCheckSameHostRedirectRejectsUnsupportedScheme(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewClient("http://grafana.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := &http.Request{URL: &url.URL{Scheme: "http", Host: "grafana.example.com"}}
+	target := &http.Request{URL: &url.URL{Scheme: "ftp", Host: "grafana.example.com"}}
+	if err := client.httpClient.CheckRedirect(target, []*http.Request{original}); err == nil {
+		t.Fatal("unsupported redirect scheme succeeded")
+	}
+}
+
 func TestCheckSameHostRedirect(t *testing.T) {
 	t.Parallel()
 

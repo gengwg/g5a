@@ -21,6 +21,7 @@ const (
 	maxResponseBytes         = 32 << 20
 	datasourceFailureBackoff = 30 * time.Second
 	maxRedirectCount         = 10
+	schemeHTTP               = "http"
 	schemeHTTPS              = "https"
 )
 
@@ -141,6 +142,9 @@ func checkSameHostRedirect(request *http.Request, via []*http.Request) error {
 		return errTooManyRedirects
 	}
 	original := via[0].URL
+	if request.URL.Scheme != schemeHTTP && request.URL.Scheme != schemeHTTPS {
+		return fmt.Errorf("%w: %s", errCrossOriginRedirect, request.URL.Scheme)
+	}
 	if !strings.EqualFold(request.URL.Hostname(), original.Hostname()) ||
 		effectivePort(request.URL) != effectivePort(original) {
 		return fmt.Errorf("%w: %s", errCrossOriginRedirect, request.URL.Host)
@@ -157,7 +161,7 @@ func effectivePort(parsedURL *url.URL) string {
 		return port
 	}
 	switch parsedURL.Scheme {
-	case "http":
+	case schemeHTTP:
 		return "80"
 	case schemeHTTPS:
 		return "443"
@@ -432,11 +436,18 @@ func (c *Client) ResolveDatasourceUID(
 			c.dsFetchDone = make(chan struct{})
 			c.dsMutex.Unlock()
 
-			c.populateDatasourceCache(ctx)
+			done := c.dsFetchDone
+			func() {
+				defer func() {
+					c.dsMutex.Lock()
+					c.dsFetchInFlight = false
+					close(done)
+					c.dsMutex.Unlock()
+				}()
+				c.populateDatasourceCache(ctx)
+			}()
 
 			c.dsMutex.Lock()
-			c.dsFetchInFlight = false
-			close(c.dsFetchDone)
 			uid := c.resolveDatasourceUIDLocked(nameOrUID, typeHint)
 			c.dsMutex.Unlock()
 
