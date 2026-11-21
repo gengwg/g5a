@@ -88,6 +88,60 @@ func TestResolveDatasourceUIDCoalescesConcurrentFetch(t *testing.T) {
 	}
 }
 
+func TestResolveDatasourceUIDFailureBacksOffWaiters(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstDone := make(chan string, 1)
+	go func() { firstDone <- client.ResolveDatasourceUID(t.Context(), "shared", "") }()
+	waitForSignal(t, started, "first datasource lookup")
+	secondDone := make(chan string, 1)
+	go func() { secondDone <- client.ResolveDatasourceUID(t.Context(), "shared", "") }()
+	select {
+	case got := <-secondDone:
+		t.Fatalf("second lookup completed during first request with %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	for range 2 {
+		select {
+		case got := <-firstDone:
+			if got != "shared" {
+				t.Errorf("first lookup = %q, want shared", got)
+			}
+		case got := <-secondDone:
+			if got != "shared" {
+				t.Errorf("second lookup = %q, want shared", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("datasource lookup did not finish")
+		}
+	}
+	if got := client.ResolveDatasourceUID(t.Context(), "shared", ""); got != "shared" {
+		t.Errorf("lookup during backoff = %q, want shared", got)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("datasource requests = %d, want 1", got)
+	}
+}
+
 func TestResolveDatasourceUIDBacksOffRepeatedFailures(t *testing.T) {
 	t.Parallel()
 

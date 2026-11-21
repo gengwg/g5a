@@ -193,7 +193,7 @@ func (a *App) handleDashboardRefresh(msg dashboardRefreshMsg) (tea.Model, tea.Cm
 		var command tea.Cmd
 		switch {
 		case targetPanel != nil && targetPanel.uid == dashboard.uid:
-			command = tea.Batch(targetPanel.fetchPanelData(), dashboard.scheduleRefresh())
+			command = tea.Batch(targetPanel.autoRefresh(), dashboard.scheduleRefresh())
 		case dashboard == targetDashboard:
 			var updated view
 			updated, command = dashboard.Update(msg)

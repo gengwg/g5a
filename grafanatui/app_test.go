@@ -2,6 +2,7 @@
 package grafanatui
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -140,11 +141,13 @@ func TestAppPanelRefreshWaitsForVariables(t *testing.T) {
 
 	app, _, panel := newRefreshTestStack()
 	panel.variablesReady = false
+	panel.variableResolutionPending = true
 	_, _ = app.handleDashboardRefresh(dashboardRefreshMsg{generation: 2})
 	if panel.generation != 4 {
 		t.Error("panel queried while variables were resolving")
 	}
 	panel.variablesReady = true
+	panel.variableResolutionPending = false
 	_, _ = app.handleDashboardRefresh(dashboardRefreshMsg{generation: 2})
 	if panel.generation != 5 {
 		t.Error("panel did not refresh after variables resolved")
@@ -165,6 +168,27 @@ func TestAppDashboardRefreshWorksAfterPanelReturn(t *testing.T) {
 	}
 	if panel.generation != 5 {
 		t.Error("hidden panel refreshed after returning to the grid")
+	}
+}
+
+func TestAppPanelRefreshRetriesFailedVariables(t *testing.T) {
+	t.Parallel()
+
+	app, _, panel := newRefreshTestStack()
+	panel.variablesReady = false
+	_, _ = app.handleDashboardRefresh(dashboardRefreshMsg{generation: 2})
+	if !panel.variableResolutionPending || panel.variableGeneration != 1 || !panel.loading {
+		t.Fatal("refresh did not retry failed variable resolution")
+	}
+	_, _ = app.Update(variablesResolveErrorMsg{
+		err: errors.New("resolution failed"), generation: panel.variableGeneration,
+	})
+	if panel.variableResolutionPending {
+		t.Fatal("variable failure left resolution pending")
+	}
+	_, _ = app.handleDashboardRefresh(dashboardRefreshMsg{generation: 2})
+	if !panel.variableResolutionPending || panel.variableGeneration != 2 {
+		t.Error("next refresh did not retry variable resolution")
 	}
 }
 

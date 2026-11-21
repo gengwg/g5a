@@ -27,27 +27,28 @@ type (
 
 // panelView shows one panel at a time with navigation.
 type panelView struct {
-	client             *grafana.Client
-	uid                string
-	dashboard          *grafana.Dashboard
-	panels             []grafana.Panel
-	index              int
-	data               *grafana.QueryResult
-	loading            bool
-	width              int
-	height             int
-	timeRange          grafana.TimeRange
-	err                error
-	hiddenSeries       map[string]bool
-	variableValues     map[string]string
-	variableOptions    map[string][]string
-	initialPanelID     int // if >0, jump to this panel after loading
-	initialVariables   map[string]string
-	preserveTimeRange  bool
-	generation         int
-	variableGeneration int
-	variablesReady     bool
-	cancel             context.CancelFunc
+	client                    *grafana.Client
+	uid                       string
+	dashboard                 *grafana.Dashboard
+	panels                    []grafana.Panel
+	index                     int
+	data                      *grafana.QueryResult
+	loading                   bool
+	width                     int
+	height                    int
+	timeRange                 grafana.TimeRange
+	err                       error
+	hiddenSeries              map[string]bool
+	variableValues            map[string]string
+	variableOptions           map[string][]string
+	initialPanelID            int // if >0, jump to this panel after loading
+	initialVariables          map[string]string
+	preserveTimeRange         bool
+	generation                int
+	variableGeneration        int
+	variablesReady            bool
+	variableResolutionPending bool
+	cancel                    context.CancelFunc
 }
 
 // newPanelView creates a panel view that will load the given
@@ -197,6 +198,7 @@ func (p *panelView) handleVariablesResolved(
 	p.variableOptions = msg.options
 	p.variableValues = msg.defaults
 	p.variablesReady = true
+	p.variableResolutionPending = false
 	p.err = nil
 	p.initialVariables = nil
 
@@ -211,6 +213,7 @@ func (p *panelView) handleVariablesResolveError(
 	}
 	p.err = msg.err
 	p.variablesReady = false
+	p.variableResolutionPending = false
 	p.loading = false
 
 	return p, nil
@@ -224,6 +227,7 @@ func (p *panelView) resolveVariables() tea.Cmd {
 
 func (p *panelView) resolveVariablesWithChanges(changedVariables map[string]bool) tea.Cmd {
 	p.variablesReady = false
+	p.variableResolutionPending = true
 	p.variableGeneration++
 	generation := p.variableGeneration
 	client := p.client
@@ -277,7 +281,7 @@ func (p *panelView) handleKeyMsgGuarded(msg tea.KeyMsg) (view, tea.Cmd) {
 		return p, nil
 	}
 	if !p.variablesReady {
-		if msg.String() == "r" {
+		if msg.String() == "r" && !p.variableResolutionPending {
 			p.err = nil
 			p.loading = true
 
@@ -420,6 +424,20 @@ func (p *panelView) invalidatePanelQuery() {
 }
 
 // fetchPanelData returns a command to load the current panel's data.
+func (p *panelView) autoRefresh() tea.Cmd {
+	if len(p.panels) == 0 || p.variableResolutionPending {
+		return nil
+	}
+	if !p.variablesReady {
+		p.err = nil
+		p.loading = true
+
+		return p.resolveVariables()
+	}
+
+	return p.fetchPanelData()
+}
+
 func (p *panelView) fetchPanelData() tea.Cmd {
 	if len(p.panels) == 0 || !p.variablesReady {
 		return nil

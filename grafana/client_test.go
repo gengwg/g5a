@@ -182,6 +182,33 @@ func TestClient_APIErrorDoesNotExposeResponseBody(t *testing.T) {
 	}
 }
 
+func TestClient_APIErrorTakesPrecedenceOverBodyReadError(t *testing.T) {
+	t.Parallel()
+
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{ //nolint:exhaustruct // synthetic test response
+			StatusCode: http.StatusBadRequest,
+			Status:     "400 Bad Request",
+			Body:       io.NopCloser(&errorReader{err: errors.New("connection reset")}),
+			Request:    request,
+		}, nil
+	})
+	client, err := grafana.NewClient(
+		"https://grafana.example.com",
+		grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err == nil || !strings.Contains(err.Error(), "400 Bad Request") {
+		t.Fatalf("error = %v, want HTTP status", err)
+	}
+	if strings.Contains(err.Error(), "reading response") {
+		t.Fatalf("body read error hid HTTP status: %v", err)
+	}
+}
+
 func TestClient_TransportErrorDoesNotExposeUserinfo(t *testing.T) {
 	t.Parallel()
 

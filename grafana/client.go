@@ -50,6 +50,7 @@ type Client struct {
 	dsRetryAfter    time.Time
 	dsFetchInFlight bool
 	dsFetchDone     chan struct{}
+	dsWaiters       int
 	dsMutex         sync.Mutex
 
 	namespaceCache    string
@@ -122,6 +123,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		dsRetryAfter:    time.Time{},
 		dsFetchInFlight: false,
 		dsFetchDone:     nil,
+		dsWaiters:       0,
 	}
 	if parsedURL.User != nil {
 		client.username = parsedURL.User.Username()
@@ -215,11 +217,8 @@ func (c *Client) doJSON(
 		return sanitizedTransportError(err)
 	}
 
-	responseBody, err := readResponseBody(response.Body)
+	responseBody, readErr := readResponseBody(response.Body)
 	_ = response.Body.Close()
-	if err != nil {
-		return err
-	}
 
 	slog.Debug("grafana response",
 		"path", request.URL.Path,
@@ -232,6 +231,9 @@ func (c *Client) doJSON(
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
 		}
+	}
+	if readErr != nil {
+		return readErr
 	}
 
 	if err := json.Unmarshal(responseBody, dst); err != nil {
@@ -276,11 +278,8 @@ func (c *Client) doPostJSON(
 		return sanitizedTransportError(err)
 	}
 
-	responseBody, err := readResponseBody(response.Body)
+	responseBody, readErr := readResponseBody(response.Body)
 	_ = response.Body.Close()
-	if err != nil {
-		return err
-	}
 
 	slog.Debug("grafana response",
 		"path", request.URL.Path,
@@ -293,6 +292,9 @@ func (c *Client) doPostJSON(
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
 		}
+	}
+	if readErr != nil {
+		return readErr
 	}
 
 	if err := json.Unmarshal(responseBody, dst); err != nil {
@@ -442,11 +444,19 @@ func (c *Client) ResolveDatasourceUID(
 			return uid
 		}
 		done := c.dsFetchDone
+		c.dsWaiters++
 		c.dsMutex.Unlock()
 
 		select {
 		case <-done:
+			c.dsMutex.Lock()
+			c.dsWaiters--
+			c.dsMutex.Unlock()
 		case <-ctx.Done():
+			c.dsMutex.Lock()
+			c.dsWaiters--
+			c.dsMutex.Unlock()
+
 			return nameOrUID
 		}
 	}
@@ -475,7 +485,7 @@ func (c *Client) populateDatasourceCache(ctx context.Context) {
 	if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
 		c.dsMutex.Lock()
 		c.dsFailureCount++
-		if c.dsFailureCount > 1 {
+		if c.dsFailureCount > 1 || c.dsWaiters > 0 {
 			c.dsRetryAfter = time.Now().Add(datasourceFailureBackoff)
 		}
 		c.dsMutex.Unlock()
