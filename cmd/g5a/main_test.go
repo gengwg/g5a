@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,6 +53,34 @@ func TestParseGrafanaURLDefaults(t *testing.T) {
 	}
 	if parts.orgID != "" || len(parts.variables) != 0 {
 		t.Errorf("unexpected defaults: %+v", parts)
+	}
+}
+
+func TestWarnCleartextHTTP(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		rawURL  string
+		wantLog bool
+	}{
+		{name: "remote HTTP", rawURL: "http://user:secret@grafana.example.com", wantLog: true},
+		{name: "remote HTTPS", rawURL: "https://grafana.example.com", wantLog: false},
+		{name: "localhost", rawURL: "http://localhost:3000", wantLog: false},
+		{name: "IPv4 loopback", rawURL: "http://127.0.0.1:3000", wantLog: false},
+		{name: "IPv6 loopback", rawURL: "http://[::1]:3000", wantLog: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var output bytes.Buffer
+			warnCleartextHTTP(&output, test.rawURL)
+			if got := strings.Contains(output.String(), "cleartext HTTP"); got != test.wantLog {
+				t.Errorf("warning = %q, wantLog %v", output.String(), test.wantLog)
+			}
+			if strings.Contains(output.String(), "user") || strings.Contains(output.String(), "secret") {
+				t.Errorf("warning exposes userinfo: %q", output.String())
+			}
+		})
 	}
 }
 

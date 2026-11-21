@@ -103,7 +103,7 @@ export GRAFANA_SERVICE_ACCOUNT_TOKEN=YOUR_TOKEN
 g5a
 ```
 
-Basic auth is also available through `GRAFANA_USERNAME` and `GRAFANA_PASSWORD`, or the corresponding CLI flags. CLI flags override environment variables.
+Basic auth is also available through `GRAFANA_USERNAME` and `GRAFANA_PASSWORD`, or the corresponding CLI flags. CLI flags override environment variables. URL userinfo is accepted as a basic-auth fallback, but explicit credentials and token auth take precedence.
 
 ### Flags
 
@@ -141,9 +141,9 @@ In a zoomed panel, `j`/`k` navigates panels, `g` opens the panel picker, and `f`
 
 The application performs read-only dashboard, datasource, query, and alert-rule API requests. It does not edit dashboards, alerting rules, silences, or datasource configuration.
 
-Request and response bodies are not logged or included in returned error strings. Request lines are off by default; `--debug` enables method, path, status, and byte-count logs without bodies. URL userinfo is removed from transport errors. On Linux, the default log is `${XDG_CACHE_HOME:-~/.cache}/g5a/g5a.log`; the directory is created with mode `0700` and the file with mode `0600`. Other platforms use the corresponding `os.UserCacheDir` location.
+Request and response bodies are not logged or included in returned error strings. Request lines are off by default; `--debug` enables method, path, status, and byte-count logs without bodies. URL userinfo is removed from displayed URLs and transport errors. On Linux, the default log is `${XDG_CACHE_HOME:-~/.cache}/g5a/g5a.log`; the directory is created with mode `0700` and the file with mode `0600`. Other platforms use the corresponding `os.UserCacheDir` location.
 
-Use a least-privilege read-only service account and TLS for remote Grafana instances.
+Use a least-privilege read-only service account and TLS for remote Grafana instances. Loopback HTTP is supported for local development; non-loopback HTTP prints a cleartext-transport warning.
 
 ## Development
 

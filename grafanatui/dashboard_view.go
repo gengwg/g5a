@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -321,15 +322,23 @@ func (d *dashboardView) expandPanels() {
 
 func (d *dashboardView) refreshAndSchedule() tea.Cmd {
 	refresh := d.startRefresh()
-	if d.refresh <= 0 {
+	tick := d.scheduleRefresh()
+	if tick == nil {
 		return refresh
 	}
-	generation := d.generation
-	tick := tea.Tick(d.refresh, func(time.Time) tea.Msg {
-		return dashboardRefreshMsg{generation: generation}
-	})
 
 	return tea.Batch(refresh, tick)
+}
+
+func (d *dashboardView) scheduleRefresh() tea.Cmd {
+	if d.refresh <= 0 {
+		return nil
+	}
+	generation := d.generation
+
+	return tea.Tick(d.refresh, func(time.Time) tea.Msg {
+		return dashboardRefreshMsg{generation: generation}
+	})
 }
 
 func (d *dashboardView) startRefresh() tea.Cmd {
@@ -636,13 +645,38 @@ func (d *dashboardView) KeyBindings() []key.Binding {
 }
 
 func dashboardRefreshInterval(value string) time.Duration {
-	if value != "" {
-		if interval, err := time.ParseDuration(value); err == nil {
-			return max(interval, 0)
-		}
+	normalized := strings.TrimSpace(value)
+	if interval, ok := grafanaCalendarDuration(normalized); ok {
+		return interval
+	}
+	if interval, err := time.ParseDuration(normalized); err == nil {
+		return max(interval, 0)
 	}
 
 	return 30 * time.Second
+}
+
+func grafanaCalendarDuration(value string) (time.Duration, bool) {
+	if len(value) < 2 {
+		return 0, false
+	}
+	unit := value[len(value)-1]
+	if unit != 'd' && unit != 'w' {
+		return 0, false
+	}
+	number, err := strconv.Atoi(value[:len(value)-1])
+	if err != nil || number < 0 {
+		return 0, false
+	}
+	unitInterval := 24 * time.Hour
+	if unit == 'w' {
+		unitInterval *= 7
+	}
+	if time.Duration(number) > (1<<63-1)/unitInterval {
+		return 0, false
+	}
+
+	return time.Duration(number) * unitInterval, true
 }
 
 func changedVariableNames(before, after map[string]string) map[string]bool {

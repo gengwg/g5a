@@ -170,9 +170,9 @@ try:
     assert all(text in transformations for text in ("First", "Last", "Max", "temperature", "humidity"))
     assert "boundary" in transformations and "middle" in transformations
     assert "outside" not in transformations
-    inner = transformations.split("Inner join", 1)[1].split("Outer tabular", 1)[0]
+    inner = transformations.rsplit("Inner join", 1)[1].split("Outer tabular", 1)[0]
     assert "shared" in inner and "leftOnly" not in inner and "rightOnly" not in inner
-    outer = transformations.split("Outer tabular", 1)[1]
+    outer = transformations.rsplit("Outer tabular", 1)[1]
     assert all(text in outer for text in ("shared", "leftOnly", "rightOnly"))
     assert "unsupported" not in transformations
     print("reducers, time filters, and inner/outer-tabular joins: OK")

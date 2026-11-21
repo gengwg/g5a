@@ -89,6 +89,50 @@ func TestSearchDashboardsPaginates(t *testing.T) {
 	}
 }
 
+func TestSearchDashboardsRejectsRepeatedPage(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		results := make([]map[string]string, 1000)
+		for index := range results {
+			results[index] = map[string]string{"uid": fmt.Sprintf("result-%d", index)}
+		}
+		assert.NoError(t, json.NewEncoder(w).Encode(results))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	_, err = client.SearchDashboards(t.Context(), "")
+	require.ErrorContains(t, err, "repeated page")
+	assert.Equal(t, 2, requests)
+}
+
+func TestSearchDashboardsCapsPages(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		page, err := strconv.Atoi(r.URL.Query().Get("page"))
+		assert.NoError(t, err)
+		results := make([]map[string]string, 1000)
+		for index := range results {
+			results[index] = map[string]string{
+				"uid": fmt.Sprintf("page-%d-result-%d", page, index),
+			}
+		}
+		assert.NoError(t, json.NewEncoder(w).Encode(results))
+	}))
+	defer server.Close()
+	client, err := grafana.NewClient(server.URL, grafana.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	_, err = client.SearchDashboards(t.Context(), "")
+	require.ErrorContains(t, err, "page limit")
+	assert.Equal(t, 100, requests)
+}
+
 func TestGetDashboard(t *testing.T) {
 	t.Parallel()
 

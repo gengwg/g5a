@@ -46,6 +46,7 @@ type panelView struct {
 	preserveTimeRange  bool
 	generation         int
 	variableGeneration int
+	variablesReady     bool
 	cancel             context.CancelFunc
 }
 
@@ -195,6 +196,7 @@ func (p *panelView) handleVariablesResolved(
 	}
 	p.variableOptions = msg.options
 	p.variableValues = msg.defaults
+	p.variablesReady = true
 	p.initialVariables = nil
 
 	return p, p.fetchPanelData()
@@ -207,6 +209,7 @@ func (p *panelView) handleVariablesResolveError(
 		return p, nil
 	}
 	p.err = msg.err
+	p.variablesReady = false
 	p.loading = false
 
 	return p, nil
@@ -219,6 +222,7 @@ func (p *panelView) resolveVariables() tea.Cmd {
 }
 
 func (p *panelView) resolveVariablesWithChanges(changedVariables map[string]bool) tea.Cmd {
+	p.variablesReady = false
 	p.variableGeneration++
 	generation := p.variableGeneration
 	client := p.client
@@ -268,7 +272,7 @@ func (p *panelView) handleKeyMsgGuarded(msg tea.KeyMsg) (view, tea.Cmd) {
 		return p, func() tea.Msg { return popViewMsg{} }
 	}
 
-	if p.dashboard == nil || p.variableValues == nil {
+	if p.dashboard == nil || !p.variablesReady {
 		return p, nil
 	}
 
@@ -406,7 +410,7 @@ func (p *panelView) invalidatePanelQuery() {
 
 // fetchPanelData returns a command to load the current panel's data.
 func (p *panelView) fetchPanelData() tea.Cmd {
-	if len(p.panels) == 0 {
+	if len(p.panels) == 0 || !p.variablesReady {
 		return nil
 	}
 

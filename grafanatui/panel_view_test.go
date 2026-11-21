@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gengwg/g5a/grafana"
 )
 
@@ -136,6 +137,22 @@ func TestPanelViewChangeVariablesRejectsInFlightQuery(t *testing.T) {
 	}
 	if output := view.renderContent(80, 4); strings.Contains(output, "42") {
 		t.Errorf("old query result was displayed under the new selection:\n%s", output)
+	}
+}
+
+func TestPanelViewKeyGuardWaitsForVariables(t *testing.T) {
+	t.Parallel()
+
+	view := newPanelView(nil, "fixture")
+	view.dashboard = &grafana.Dashboard{}
+	view.panels = []grafana.Panel{{ID: 1}, {ID: 2}}
+	view.variableValues = map[string]string{"instance": "current"}
+	view.variablesReady = false
+	view.data = numericResult(42)
+	view.loading = false
+	_, command := view.handleKeyMsgGuarded(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if command != nil || view.index != 0 || view.data == nil || view.loading {
+		t.Error("navigation changed panel state while variables were not ready")
 	}
 }
 
