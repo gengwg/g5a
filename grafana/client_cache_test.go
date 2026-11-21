@@ -2,6 +2,7 @@
 package grafana
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,7 +89,7 @@ func TestResolveDatasourceUIDCoalescesConcurrentFetch(t *testing.T) {
 	}
 }
 
-func TestResolveDatasourceUIDFailureBacksOffWaiters(t *testing.T) {
+func TestResolveDatasourceUIDSharedFailureAllowsOneRetry(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{})
@@ -98,8 +99,9 @@ func TestResolveDatasourceUIDFailureBacksOffWaiters(t *testing.T) {
 	defer unblock()
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		close(started)
+		if requests.Add(1) == 1 {
+			close(started)
+		}
 		<-release
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -136,6 +138,34 @@ func TestResolveDatasourceUIDFailureBacksOffWaiters(t *testing.T) {
 	}
 	if got := client.ResolveDatasourceUID(t.Context(), "shared", ""); got != "shared" {
 		t.Errorf("lookup during backoff = %q, want shared", got)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Errorf("datasource requests = %d, want one fetch and one recovery attempt", got)
+	}
+}
+
+func TestResolveDatasourceUIDCancellationDoesNotBackoff(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`[{"uid":"new-uid","name":"shared","type":"prometheus"}]`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	client.populateDatasourceCache(ctx)
+	if client.dsFailureCount != 0 || !client.dsRetryAfter.IsZero() {
+		t.Fatal("caller cancellation was recorded as a backend failure")
+	}
+	if got := client.ResolveDatasourceUID(t.Context(), "shared", ""); got != "new-uid" {
+		t.Errorf("lookup after cancellation = %q, want new-uid", got)
 	}
 	if got := requests.Load(); got != 1 {
 		t.Errorf("datasource requests = %d, want 1", got)

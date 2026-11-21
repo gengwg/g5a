@@ -20,6 +20,7 @@ const (
 	datasourceTypePrometheus = "prometheus"
 	maxResponseBytes         = 32 << 20
 	datasourceFailureBackoff = 30 * time.Second
+	maxRedirectCount         = 10
 	schemeHTTPS              = "https"
 )
 
@@ -50,7 +51,6 @@ type Client struct {
 	dsRetryAfter    time.Time
 	dsFetchInFlight bool
 	dsFetchDone     chan struct{}
-	dsWaiters       int
 	dsMutex         sync.Mutex
 
 	namespaceCache    string
@@ -123,7 +123,6 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		dsRetryAfter:    time.Time{},
 		dsFetchInFlight: false,
 		dsFetchDone:     nil,
-		dsWaiters:       0,
 	}
 	if parsedURL.User != nil {
 		client.username = parsedURL.User.Username()
@@ -138,7 +137,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 }
 
 func checkSameHostRedirect(request *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
+	if len(via) >= maxRedirectCount {
 		return errTooManyRedirects
 	}
 	original := via[0].URL
@@ -444,19 +443,11 @@ func (c *Client) ResolveDatasourceUID(
 			return uid
 		}
 		done := c.dsFetchDone
-		c.dsWaiters++
 		c.dsMutex.Unlock()
 
 		select {
 		case <-done:
-			c.dsMutex.Lock()
-			c.dsWaiters--
-			c.dsMutex.Unlock()
 		case <-ctx.Done():
-			c.dsMutex.Lock()
-			c.dsWaiters--
-			c.dsMutex.Unlock()
-
 			return nameOrUID
 		}
 	}
@@ -483,9 +474,13 @@ func (c *Client) resolveDatasourceUIDLocked(nameOrUID, typeHint string) string {
 func (c *Client) populateDatasourceCache(ctx context.Context) {
 	var datasources []datasourceInfo
 	if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		c.dsMutex.Lock()
 		c.dsFailureCount++
-		if c.dsFailureCount > 1 || c.dsWaiters > 0 {
+		// Allow one immediate recovery attempt before throttling failures.
+		if c.dsFailureCount > 1 {
 			c.dsRetryAfter = time.Now().Add(datasourceFailureBackoff)
 		}
 		c.dsMutex.Unlock()
