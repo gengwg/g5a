@@ -43,12 +43,14 @@ type Client struct {
 	// dsCache maps datasource name → UID, lazily populated.
 	dsCache map[string]string
 	// dsTypeCache maps datasource type → first UID of that type.
-	dsTypeCache    map[string]string
-	scrapeCache    map[string]int
-	dsResolved     bool
-	dsFailureCount int
-	dsRetryAfter   time.Time
-	dsMutex        sync.Mutex
+	dsTypeCache     map[string]string
+	scrapeCache     map[string]int
+	dsResolved      bool
+	dsFailureCount  int
+	dsRetryAfter    time.Time
+	dsFetchInFlight bool
+	dsFetchDone     chan struct{}
+	dsMutex         sync.Mutex
 
 	namespaceCache    string
 	namespaceResolved bool
@@ -78,7 +80,21 @@ func WithOrgID(orgID string) ClientOption {
 
 // WithHTTPClient sets a custom HTTP client.
 func WithHTTPClient(httpClient *http.Client) ClientOption {
-	return func(c *Client) { c.httpClient = httpClient }
+	return func(c *Client) {
+		cloned := *httpClient
+		customRedirect := cloned.CheckRedirect
+		cloned.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+			if err := checkSameHostRedirect(request, via); err != nil {
+				return err
+			}
+			if customRedirect != nil {
+				return customRedirect(request, via)
+			}
+
+			return nil
+		}
+		c.httpClient = &cloned
+	}
 }
 
 // NewClient creates a new Grafana API client.
@@ -98,12 +114,14 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 			Timeout:       60 * time.Second,
 			CheckRedirect: checkSameHostRedirect,
 		},
-		dsCache:        nil,
-		dsTypeCache:    nil,
-		scrapeCache:    nil,
-		dsResolved:     false,
-		dsFailureCount: 0,
-		dsRetryAfter:   time.Time{},
+		dsCache:         nil,
+		dsTypeCache:     nil,
+		scrapeCache:     nil,
+		dsResolved:      false,
+		dsFailureCount:  0,
+		dsRetryAfter:    time.Time{},
+		dsFetchInFlight: false,
+		dsFetchDone:     nil,
 	}
 	if parsedURL.User != nil {
 		client.username = parsedURL.User.Username()
@@ -395,21 +413,46 @@ func parseDurationMs(value string) int {
 func (c *Client) ResolveDatasourceUID(
 	ctx context.Context, nameOrUID, typeHint string,
 ) string {
-	c.dsMutex.Lock()
-	uid, ok := c.dsCache[nameOrUID]
-	needsFetch := !c.dsResolved &&
-		(c.dsRetryAfter.IsZero() || time.Now().After(c.dsRetryAfter))
-	c.dsMutex.Unlock()
-	if ok {
-		return uid
-	}
+	for {
+		c.dsMutex.Lock()
+		if uid, ok := c.dsCache[nameOrUID]; ok {
+			c.dsMutex.Unlock()
 
-	if needsFetch {
-		c.populateDatasourceCache(ctx)
-	}
+			return uid
+		}
+		if c.dsResolved || time.Now().Before(c.dsRetryAfter) {
+			uid := c.resolveDatasourceUIDLocked(nameOrUID, typeHint)
+			c.dsMutex.Unlock()
 
-	c.dsMutex.Lock()
-	defer c.dsMutex.Unlock()
+			return uid
+		}
+		if !c.dsFetchInFlight {
+			c.dsFetchInFlight = true
+			c.dsFetchDone = make(chan struct{})
+			c.dsMutex.Unlock()
+
+			c.populateDatasourceCache(ctx)
+
+			c.dsMutex.Lock()
+			c.dsFetchInFlight = false
+			close(c.dsFetchDone)
+			uid := c.resolveDatasourceUIDLocked(nameOrUID, typeHint)
+			c.dsMutex.Unlock()
+
+			return uid
+		}
+		done := c.dsFetchDone
+		c.dsMutex.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nameOrUID
+		}
+	}
+}
+
+func (c *Client) resolveDatasourceUIDLocked(nameOrUID, typeHint string) string {
 	if uid, ok := c.dsCache[nameOrUID]; ok {
 		return uid
 	}

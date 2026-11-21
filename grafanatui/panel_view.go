@@ -197,6 +197,7 @@ func (p *panelView) handleVariablesResolved(
 	p.variableOptions = msg.options
 	p.variableValues = msg.defaults
 	p.variablesReady = true
+	p.err = nil
 	p.initialVariables = nil
 
 	return p, p.fetchPanelData()
@@ -272,7 +273,17 @@ func (p *panelView) handleKeyMsgGuarded(msg tea.KeyMsg) (view, tea.Cmd) {
 		return p, func() tea.Msg { return popViewMsg{} }
 	}
 
-	if p.dashboard == nil || !p.variablesReady {
+	if p.dashboard == nil {
+		return p, nil
+	}
+	if !p.variablesReady {
+		if msg.String() == "r" {
+			p.err = nil
+			p.loading = true
+
+			return p, p.resolveVariables()
+		}
+
 		return p, nil
 	}
 

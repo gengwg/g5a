@@ -36,7 +36,7 @@ func TestResolveDatasourceUIDCachesEmptyList(t *testing.T) {
 	}
 }
 
-func TestResolveDatasourceUIDDoesNotOverwriteNewerCache(t *testing.T) {
+func TestResolveDatasourceUIDCoalescesConcurrentFetch(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{})
@@ -46,13 +46,10 @@ func TestResolveDatasourceUIDDoesNotOverwriteNewerCache(t *testing.T) {
 	defer unblock()
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		uid := "new-uid"
-		if requests.Add(1) == 1 {
-			close(started)
-			<-release
-			uid = "old-uid"
-		}
-		_, _ = w.Write([]byte(`[{"uid":"` + uid + `","name":"shared","type":"prometheus"}]`))
+		requests.Add(1)
+		close(started)
+		<-release
+		_, _ = w.Write([]byte(`[{"uid":"new-uid","name":"shared","type":"prometheus"}]`))
 	}))
 	defer server.Close()
 	client, err := NewClient(server.URL, WithHTTPClient(server.Client()))
@@ -63,17 +60,31 @@ func TestResolveDatasourceUIDDoesNotOverwriteNewerCache(t *testing.T) {
 	firstDone := make(chan string, 1)
 	go func() { firstDone <- client.ResolveDatasourceUID(t.Context(), "shared", "") }()
 	waitForSignal(t, started, "first datasource lookup")
-	if got := client.ResolveDatasourceUID(t.Context(), "shared", ""); got != "new-uid" {
-		t.Fatalf("second lookup = %q, want new-uid", got)
-	}
-	unblock()
+	secondDone := make(chan string, 1)
+	go func() { secondDone <- client.ResolveDatasourceUID(t.Context(), "shared", "") }()
 	select {
-	case got := <-firstDone:
-		if got != "new-uid" {
-			t.Errorf("late first lookup = %q, want new-uid", got)
+	case got := <-secondDone:
+		t.Fatalf("second lookup completed during first request with %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("concurrent datasource requests = %d, want 1", got)
+	}
+
+	unblock()
+	for range 2 {
+		select {
+		case got := <-firstDone:
+			if got != "new-uid" {
+				t.Errorf("first lookup = %q, want new-uid", got)
+			}
+		case got := <-secondDone:
+			if got != "new-uid" {
+				t.Errorf("second lookup = %q, want new-uid", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("datasource lookup did not finish")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("first datasource lookup did not finish")
 	}
 }
 

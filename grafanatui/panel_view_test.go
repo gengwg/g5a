@@ -156,6 +156,32 @@ func TestPanelViewKeyGuardWaitsForVariables(t *testing.T) {
 	}
 }
 
+func TestPanelViewRetriesVariableResolution(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newDependentVariableClient(t)
+	view := newPanelView(client, "fixture")
+	view.dashboard = dependentVariableDashboard(t)
+	view.panels = grafana.FlattenPanels(view.dashboard.Panels)
+	view.variableValues = map[string]string{"env": "prod", "instance": "prod-a"}
+	view.variableGeneration = 1
+	view.variablesReady = false
+	view.err = errors.New("resolution failed")
+
+	_, command := view.handleKeyMsgGuarded(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if command == nil || view.err != nil || !view.loading {
+		t.Fatal("manual retry did not restart variable resolution")
+	}
+	resolved, ok := command().(variablesResolvedMsg)
+	if !ok {
+		t.Fatal("retry did not resolve variables")
+	}
+	_, command = view.Update(resolved)
+	if command == nil || !view.variablesReady || view.err != nil {
+		t.Error("panel did not recover after successful variable resolution")
+	}
+}
+
 func TestPanelViewRejectsStaleVariables(t *testing.T) {
 	t.Parallel()
 

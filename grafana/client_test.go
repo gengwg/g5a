@@ -291,11 +291,13 @@ func TestClient_RejectsCrossOriginRedirect(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name       string
-		sourceHost string
+		name         string
+		sourceHost   string
+		customClient bool
 	}{
-		{name: "different hostname", sourceHost: "localhost"},
-		{name: "same hostname different port", sourceHost: "127.0.0.1"},
+		{name: "different hostname", sourceHost: "localhost", customClient: false},
+		{name: "same hostname different port", sourceHost: "127.0.0.1", customClient: false},
+		{name: "custom client different hostname", sourceHost: "localhost", customClient: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -316,7 +318,11 @@ func TestClient_RejectsCrossOriginRedirect(t *testing.T) {
 			defer source.Close()
 
 			sourceURL := strings.Replace(source.URL, "127.0.0.1", test.sourceHost, 1)
-			client, err := grafana.NewClient(sourceURL, grafana.WithToken("secret-token"))
+			opts := []grafana.ClientOption{grafana.WithToken("secret-token")}
+			if test.customClient {
+				opts = append(opts, grafana.WithHTTPClient(source.Client()))
+			}
+			client, err := grafana.NewClient(sourceURL, opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
