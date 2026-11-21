@@ -19,6 +19,7 @@ const (
 	defaultScrapeIntervalMs  = 15000
 	datasourceTypePrometheus = "prometheus"
 	maxResponseBytes         = 32 << 20
+	datasourceFailureBackoff = 30 * time.Second
 	schemeHTTPS              = "https"
 )
 
@@ -42,10 +43,12 @@ type Client struct {
 	// dsCache maps datasource name → UID, lazily populated.
 	dsCache map[string]string
 	// dsTypeCache maps datasource type → first UID of that type.
-	dsTypeCache map[string]string
-	scrapeCache map[string]int
-	dsResolved  bool
-	dsMutex     sync.Mutex
+	dsTypeCache    map[string]string
+	scrapeCache    map[string]int
+	dsResolved     bool
+	dsFailureCount int
+	dsRetryAfter   time.Time
+	dsMutex        sync.Mutex
 
 	namespaceCache    string
 	namespaceResolved bool
@@ -95,10 +98,12 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 			Timeout:       60 * time.Second,
 			CheckRedirect: checkSameHostRedirect,
 		},
-		dsCache:     nil,
-		dsTypeCache: nil,
-		scrapeCache: nil,
-		dsResolved:  false,
+		dsCache:        nil,
+		dsTypeCache:    nil,
+		scrapeCache:    nil,
+		dsResolved:     false,
+		dsFailureCount: 0,
+		dsRetryAfter:   time.Time{},
 	}
 	if parsedURL.User != nil {
 		client.username = parsedURL.User.Username()
@@ -392,7 +397,8 @@ func (c *Client) ResolveDatasourceUID(
 ) string {
 	c.dsMutex.Lock()
 	uid, ok := c.dsCache[nameOrUID]
-	needsFetch := !c.dsResolved
+	needsFetch := !c.dsResolved &&
+		(c.dsRetryAfter.IsZero() || time.Now().After(c.dsRetryAfter))
 	c.dsMutex.Unlock()
 	if ok {
 		return uid
@@ -424,6 +430,12 @@ func (c *Client) ResolveDatasourceUID(
 func (c *Client) populateDatasourceCache(ctx context.Context) {
 	var datasources []datasourceInfo
 	if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
+		c.dsMutex.Lock()
+		c.dsFailureCount++
+		if c.dsFailureCount > 1 {
+			c.dsRetryAfter = time.Now().Add(datasourceFailureBackoff)
+		}
+		c.dsMutex.Unlock()
 		slog.Info("failed to fetch datasources for name resolution",
 			"error", err)
 		return
@@ -434,6 +446,8 @@ func (c *Client) populateDatasourceCache(ctx context.Context) {
 	if c.dsResolved {
 		return
 	}
+	c.dsFailureCount = 0
+	c.dsRetryAfter = time.Time{}
 	if c.dsCache == nil {
 		c.dsCache = make(map[string]string)
 		c.dsTypeCache = make(map[string]string)

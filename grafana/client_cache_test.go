@@ -77,6 +77,41 @@ func TestResolveDatasourceUIDDoesNotOverwriteNewerCache(t *testing.T) {
 	}
 }
 
+func TestResolveDatasourceUIDBacksOffRepeatedFailures(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"uid":"new-uid","name":"shared","type":"prometheus"}]`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range 3 {
+		if got := client.ResolveDatasourceUID(t.Context(), "shared", ""); got != "shared" {
+			t.Errorf("failed lookup = %q, want shared", got)
+		}
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests during backoff = %d, want 2", got)
+	}
+
+	client.dsRetryAfter = time.Now().Add(-time.Second)
+	if got := client.ResolveDatasourceUID(t.Context(), "shared", ""); got != "new-uid" {
+		t.Errorf("lookup after backoff = %q, want new-uid", got)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Errorf("requests after backoff = %d, want 3", got)
+	}
+}
+
 func TestDatasourceScrapeIntervalCachesMissingUID(t *testing.T) {
 	t.Parallel()
 

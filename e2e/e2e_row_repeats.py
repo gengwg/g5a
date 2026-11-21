@@ -170,6 +170,7 @@ try:
     assert all(text in transformations for text in ("First", "Last", "Max", "temperature", "humidity"))
     assert "boundary" in transformations and "middle" in transformations
     assert "outside" not in transformations
+    # The PTY transcript contains earlier loading frames; inspect the final join view.
     inner = transformations.rsplit("Inner join", 1)[1].split("Outer tabular", 1)[0]
     assert "shared" in inner and "leftOnly" not in inner and "rightOnly" not in inner
     outer = transformations.rsplit("Outer tabular", 1)[1]

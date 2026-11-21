@@ -274,6 +274,7 @@ func (a *App) handleDashboardLoadedMsg(msg dashboardLoadedMsg) (tea.Model, tea.C
 	}
 
 	model, command := a.delegateToActiveView(msg)
+	// Only a direct panel link has an unloaded grid without an existing tick chain.
 	for _, current := range a.views {
 		dashboard, isDashboard := current.(*dashboardView)
 		if !isDashboard || dashboard.uid != panel.uid || dashboard.dashboard != nil {

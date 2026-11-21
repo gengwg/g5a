@@ -143,7 +143,7 @@ The application performs read-only dashboard, datasource, query, and alert-rule 
 
 Request and response bodies are not logged or included in returned error strings. Request lines are off by default; `--debug` enables method, path, status, and byte-count logs without bodies. URL userinfo is removed from displayed URLs and transport errors. On Linux, the default log is `${XDG_CACHE_HOME:-~/.cache}/g5a/g5a.log`; the directory is created with mode `0700` and the file with mode `0600`. Other platforms use the corresponding `os.UserCacheDir` location.
 
-Use a least-privilege read-only service account and TLS for remote Grafana instances. Loopback HTTP is supported for local development; non-loopback HTTP prints a cleartext-transport warning.
+Use a least-privilege read-only service account and TLS for remote Grafana instances. Loopback HTTP is supported for local development; non-loopback HTTP prints a cleartext-transport warning. Redirects are limited to the configured hostname and effective port, and HTTPS-to-HTTP redirects are rejected so credentials cannot leak to another service.
 
 ## Development
 
