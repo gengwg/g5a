@@ -18,6 +18,19 @@ import (
 const (
 	defaultScrapeIntervalMs  = 15000
 	datasourceTypePrometheus = "prometheus"
+	maxResponseBytes         = 32 << 20
+	datasourceFailureBackoff = 30 * time.Second
+	maxRedirectCount         = 10
+	schemeHTTP               = "http"
+	schemeHTTPS              = "https"
+)
+
+var (
+	errTooManyRedirects    = errors.New("stopped after 10 redirects")
+	errCrossOriginRedirect = errors.New("refusing redirect to a different origin")
+	errHTTPSDowngrade      = errors.New("refusing redirect from https to plaintext")
+	errResponseTooLarge    = errors.New("grafana response exceeds size limit")
+	errInvalidAPIPath      = errors.New("API path must be relative to the Grafana host")
 )
 
 // Client is an HTTP client for the Grafana API.
@@ -32,9 +45,14 @@ type Client struct {
 	// dsCache maps datasource name → UID, lazily populated.
 	dsCache map[string]string
 	// dsTypeCache maps datasource type → first UID of that type.
-	dsTypeCache map[string]string
-	scrapeCache map[string]int
-	dsMutex     sync.Mutex
+	dsTypeCache     map[string]string
+	scrapeCache     map[string]int
+	dsResolved      bool
+	dsFailureCount  int
+	dsRetryAfter    time.Time
+	dsFetchInFlight bool
+	dsFetchDone     chan struct{}
+	dsMutex         sync.Mutex
 
 	namespaceCache    string
 	namespaceResolved bool
@@ -64,7 +82,21 @@ func WithOrgID(orgID string) ClientOption {
 
 // WithHTTPClient sets a custom HTTP client.
 func WithHTTPClient(httpClient *http.Client) ClientOption {
-	return func(c *Client) { c.httpClient = httpClient }
+	return func(c *Client) {
+		cloned := *httpClient
+		customRedirect := cloned.CheckRedirect
+		cloned.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+			if err := checkSameHostRedirect(request, via); err != nil {
+				return err
+			}
+			if customRedirect != nil {
+				return customRedirect(request, via)
+			}
+
+			return nil
+		}
+		c.httpClient = &cloned
+	}
 }
 
 // NewClient creates a new Grafana API client.
@@ -75,21 +107,67 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 	}
 
 	client := &Client{ //nolint:exhaustruct // mutex and optional caches use zero values
-		baseURL:     parsedURL,
-		token:       "",
-		username:    "",
-		password:    "",
-		orgID:       "",
-		httpClient:  &http.Client{Timeout: 60 * time.Second}, //nolint:exhaustruct // default transport settings
-		dsCache:     nil,
-		dsTypeCache: nil,
-		scrapeCache: nil,
+		baseURL:  parsedURL,
+		token:    "",
+		username: "",
+		password: "",
+		orgID:    "",
+		httpClient: &http.Client{ //nolint:exhaustruct // default transport settings
+			Timeout:       60 * time.Second,
+			CheckRedirect: checkSameHostRedirect,
+		},
+		dsCache:         nil,
+		dsTypeCache:     nil,
+		scrapeCache:     nil,
+		dsResolved:      false,
+		dsFailureCount:  0,
+		dsRetryAfter:    time.Time{},
+		dsFetchInFlight: false,
+		dsFetchDone:     nil,
+	}
+	if parsedURL.User != nil {
+		client.username = parsedURL.User.Username()
+		client.password, _ = parsedURL.User.Password()
+		parsedURL.User = nil
 	}
 	for _, opt := range opts {
 		opt(client)
 	}
 
 	return client, nil
+}
+
+func checkSameHostRedirect(request *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirectCount {
+		return errTooManyRedirects
+	}
+	original := via[0].URL
+	if request.URL.Scheme != schemeHTTP && request.URL.Scheme != schemeHTTPS {
+		return fmt.Errorf("%w: %s", errCrossOriginRedirect, request.URL.Scheme)
+	}
+	if !strings.EqualFold(request.URL.Hostname(), original.Hostname()) ||
+		effectivePort(request.URL) != effectivePort(original) {
+		return fmt.Errorf("%w: %s", errCrossOriginRedirect, request.URL.Host)
+	}
+	if original.Scheme == schemeHTTPS && request.URL.Scheme != original.Scheme {
+		return errHTTPSDowngrade
+	}
+
+	return nil
+}
+
+func effectivePort(parsedURL *url.URL) string {
+	if port := parsedURL.Port(); port != "" {
+		return port
+	}
+	switch parsedURL.Scheme {
+	case schemeHTTP:
+		return "80"
+	case schemeHTTPS:
+		return "443"
+	default:
+		return ""
+	}
 }
 
 // BaseURL returns the Grafana instance base URL as a string.
@@ -121,7 +199,10 @@ func (c *Client) doJSON(
 	path string,
 	dst any,
 ) error {
-	fullURL := resolveURL(c.baseURL, path)
+	fullURL, err := resolveURL(c.baseURL, path)
+	if err != nil {
+		return err
+	}
 
 	request, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, fullURL, nil,
@@ -139,7 +220,7 @@ func (c *Client) doJSON(
 		return sanitizedTransportError(err)
 	}
 
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readResponseBody(response.Body)
 	_ = response.Body.Close()
 
 	slog.Debug("grafana response",
@@ -153,6 +234,9 @@ func (c *Client) doJSON(
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
 		}
+	}
+	if readErr != nil {
+		return readErr
 	}
 
 	if err := json.Unmarshal(responseBody, dst); err != nil {
@@ -170,7 +254,10 @@ func (c *Client) doPostJSON(
 	body any,
 	dst any,
 ) error {
-	fullURL := resolveURL(c.baseURL, path)
+	fullURL, err := resolveURL(c.baseURL, path)
+	if err != nil {
+		return err
+	}
 
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
@@ -194,7 +281,7 @@ func (c *Client) doPostJSON(
 		return sanitizedTransportError(err)
 	}
 
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readResponseBody(response.Body)
 	_ = response.Body.Close()
 
 	slog.Debug("grafana response",
@@ -209,6 +296,9 @@ func (c *Client) doPostJSON(
 			Status:     response.Status,
 		}
 	}
+	if readErr != nil {
+		return readErr
+	}
 
 	if err := json.Unmarshal(responseBody, dst); err != nil {
 		return fmt.Errorf("decoding response: %w", err)
@@ -217,17 +307,32 @@ func (c *Client) doPostJSON(
 	return nil
 }
 
+func readResponseBody(body io.Reader) ([]byte, error) {
+	payload, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+	if len(payload) > maxResponseBytes {
+		return nil, fmt.Errorf("%w: %d bytes", errResponseTooLarge, maxResponseBytes)
+	}
+
+	return payload, nil
+}
+
 // resolveURL joins the base URL with a path that may contain
 // query parameters.
-func resolveURL(base *url.URL, path string) string {
+func resolveURL(base *url.URL, path string) (string, error) {
 	ref, err := url.Parse(path)
 	if err != nil {
-		return base.String() + path
+		return "", errInvalidAPIPath
+	}
+	if ref.IsAbs() || ref.Host != "" || ref.User != nil {
+		return "", errInvalidAPIPath
 	}
 
 	ref.Path = strings.TrimRight(base.Path, "/") + ref.Path
 
-	return base.ResolveReference(ref).String()
+	return base.ResolveReference(ref).String(), nil
 }
 
 // setAuthHeader sets the appropriate auth header on the request.
@@ -252,10 +357,12 @@ type datasourceInfo struct {
 
 func (c *Client) datasourceScrapeInterval(ctx context.Context, uid string) int {
 	c.dsMutex.Lock()
-	defer c.dsMutex.Unlock()
-	if interval, ok := c.scrapeCache[uid]; ok {
+	interval, ok := c.scrapeCache[uid]
+	c.dsMutex.Unlock()
+	if ok {
 		return interval
 	}
+
 	var datasources []struct {
 		UID      string `json:"uid"`
 		JSONData struct {
@@ -265,23 +372,30 @@ func (c *Client) datasourceScrapeInterval(ctx context.Context, uid string) int {
 	if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
 		return defaultScrapeIntervalMs
 	}
+
+	interval = defaultScrapeIntervalMs
 	for _, datasource := range datasources {
 		if datasource.UID != uid {
 			continue
 		}
-		interval := parseDurationMs(datasource.JSONData.TimeInterval)
+		interval = parseDurationMs(datasource.JSONData.TimeInterval)
 		if interval <= 0 {
 			interval = defaultScrapeIntervalMs
 		}
-		if c.scrapeCache == nil {
-			c.scrapeCache = make(map[string]int)
-		}
-		c.scrapeCache[uid] = interval
-
-		return interval
+		break
 	}
 
-	return defaultScrapeIntervalMs
+	c.dsMutex.Lock()
+	defer c.dsMutex.Unlock()
+	if cached, exists := c.scrapeCache[uid]; exists {
+		return cached
+	}
+	if c.scrapeCache == nil {
+		c.scrapeCache = make(map[string]int)
+	}
+	c.scrapeCache[uid] = interval
+
+	return interval
 }
 
 func parseDurationMs(value string) int {
@@ -304,23 +418,53 @@ func parseDurationMs(value string) int {
 func (c *Client) ResolveDatasourceUID(
 	ctx context.Context, nameOrUID, typeHint string,
 ) string {
-	c.dsMutex.Lock()
-	defer c.dsMutex.Unlock()
+	for {
+		c.dsMutex.Lock()
+		if uid, ok := c.dsCache[nameOrUID]; ok {
+			c.dsMutex.Unlock()
 
-	if c.dsCache == nil {
-		c.dsCache = make(map[string]string)
-		c.dsTypeCache = make(map[string]string)
+			return uid
+		}
+		if c.dsResolved || time.Now().Before(c.dsRetryAfter) {
+			uid := c.resolveDatasourceUIDLocked(nameOrUID, typeHint)
+			c.dsMutex.Unlock()
+
+			return uid
+		}
+		if !c.dsFetchInFlight {
+			c.dsFetchInFlight = true
+			c.dsFetchDone = make(chan struct{})
+			c.dsMutex.Unlock()
+
+			done := c.dsFetchDone
+			func() {
+				defer func() {
+					c.dsMutex.Lock()
+					c.dsFetchInFlight = false
+					close(done)
+					c.dsMutex.Unlock()
+				}()
+				c.populateDatasourceCache(ctx)
+			}()
+
+			c.dsMutex.Lock()
+			uid := c.resolveDatasourceUIDLocked(nameOrUID, typeHint)
+			c.dsMutex.Unlock()
+
+			return uid
+		}
+		done := c.dsFetchDone
+		c.dsMutex.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nameOrUID
+		}
 	}
+}
 
-	if uid, ok := c.dsCache[nameOrUID]; ok {
-		return uid
-	}
-
-	// Fetch all datasources and populate cache.
-	if len(c.dsTypeCache) == 0 {
-		c.populateDatasourceCache(ctx)
-	}
-
+func (c *Client) resolveDatasourceUIDLocked(nameOrUID, typeHint string) string {
 	if uid, ok := c.dsCache[nameOrUID]; ok {
 		return uid
 	}
@@ -341,11 +485,33 @@ func (c *Client) ResolveDatasourceUID(
 func (c *Client) populateDatasourceCache(ctx context.Context) {
 	var datasources []datasourceInfo
 	if err := c.doJSON(ctx, "/api/datasources", &datasources); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		c.dsMutex.Lock()
+		c.dsFailureCount++
+		// Allow one immediate recovery attempt before throttling failures.
+		if c.dsFailureCount > 1 {
+			c.dsRetryAfter = time.Now().Add(datasourceFailureBackoff)
+		}
+		c.dsMutex.Unlock()
 		slog.Info("failed to fetch datasources for name resolution",
 			"error", err)
 		return
 	}
 
+	c.dsMutex.Lock()
+	defer c.dsMutex.Unlock()
+	if c.dsResolved {
+		return
+	}
+	c.dsFailureCount = 0
+	c.dsRetryAfter = time.Time{}
+	if c.dsCache == nil {
+		c.dsCache = make(map[string]string)
+		c.dsTypeCache = make(map[string]string)
+	}
+	c.dsResolved = true
 	for _, ds := range datasources {
 		c.dsCache[ds.Name] = ds.UID
 		c.dsCache[ds.UID] = ds.UID

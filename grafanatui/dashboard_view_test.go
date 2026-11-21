@@ -37,6 +37,22 @@ func TestAppHeaderUsesG5AName(t *testing.T) {
 	}
 }
 
+func TestAppHeaderDoesNotExposeURLUserinfo(t *testing.T) {
+	t.Parallel()
+
+	client, err := grafana.NewClient("https://svc:s3cret@grafana.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := NewApp(client, Options{}).renderHeader()
+	if strings.Contains(header, "svc") || strings.Contains(header, "s3cret") {
+		t.Errorf("header exposes URL userinfo: %q", header)
+	}
+	if !strings.Contains(header, "https://grafana.example.com") {
+		t.Errorf("header does not contain the sanitized Grafana URL: %q", header)
+	}
+}
+
 func TestDashboardViewRendersRepeatedPanels(t *testing.T) {
 	t.Parallel()
 
@@ -576,11 +592,28 @@ func TestDashboardViewCachesRenderedBody(t *testing.T) {
 func TestDashboardRefreshInterval(t *testing.T) {
 	t.Parallel()
 
-	if got := dashboardRefreshInterval("0s"); got != 0 {
-		t.Errorf("disabled refresh = %v, want 0", got)
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "default", value: "", want: 30 * time.Second},
+		{name: "disabled", value: "0s", want: 0},
+		{name: "minutes", value: "5m", want: 5 * time.Minute},
+		{name: "day", value: "1d", want: 24 * time.Hour},
+		{name: "weeks", value: "2w", want: 336 * time.Hour},
+		{name: "whitespace", value: " 1d ", want: 24 * time.Hour},
+		{name: "negative", value: "-5m", want: 0},
+		{name: "unknown unit", value: "1x", want: 30 * time.Second},
+		{name: "out of range", value: "9223372036854775807d", want: 30 * time.Second},
 	}
-	if got := dashboardRefreshInterval("5m"); got != 5*time.Minute {
-		t.Errorf("refresh = %v, want 5m", got)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := dashboardRefreshInterval(test.value); got != test.want {
+				t.Errorf("refresh = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

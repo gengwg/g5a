@@ -6,7 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
+)
+
+const (
+	dashboardSearchPageSize = 1000
+	maxDashboardSearchPages = 100
+)
+
+var (
+	errRepeatedSearchPage = errors.New("dashboard search returned a repeated page")
+	errSearchPageLimit    = errors.New("dashboard search exceeded the page limit")
 )
 
 // DashboardSearchResult represents a dashboard in search results.
@@ -256,24 +267,35 @@ func (c *Client) SearchDashboards(
 ) ([]DashboardSearchResult, error) {
 	params := url.Values{
 		"type":  {"dash-db"},
-		"limit": {"1000"},
+		"limit": {strconv.Itoa(dashboardSearchPageSize)},
 	}
 	if query != "" {
 		params.Set("query", query)
 	}
 
 	results := make([]DashboardSearchResult, 0)
-	for page := 1; ; page++ {
+	var previousPageUIDs []string
+	for page := 1; page <= maxDashboardSearchPages; page++ {
 		params.Set("page", strconv.Itoa(page))
 		var pageResults []DashboardSearchResult
 		if err := c.doJSON(ctx, "/api/search?"+params.Encode(), &pageResults); err != nil {
 			return nil, fmt.Errorf("searching dashboards: %w", err)
 		}
+		pageUIDs := make([]string, len(pageResults))
+		for index := range pageResults {
+			pageUIDs[index] = pageResults[index].UID
+		}
+		if len(pageResults) > 0 && slices.Equal(pageUIDs, previousPageUIDs) {
+			return nil, fmt.Errorf("searching dashboards: %w at page %d", errRepeatedSearchPage, page)
+		}
 		results = append(results, pageResults...)
-		if len(pageResults) < 1000 {
+		if len(pageResults) < dashboardSearchPageSize {
 			return results, nil
 		}
+		previousPageUIDs = pageUIDs
 	}
+
+	return nil, fmt.Errorf("searching dashboards: %w (%d)", errSearchPageLimit, maxDashboardSearchPages)
 }
 
 // GetDashboard returns the full dashboard by UID.

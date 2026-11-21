@@ -156,11 +156,10 @@ type dashboardV2Variable struct {
 
 func (c *Client) dashboardNamespace(ctx context.Context) (string, error) {
 	cloudHost := strings.HasSuffix(c.baseURL.Hostname(), ".grafana.net")
-	c.namespaceMutex.Lock()
-	defer c.namespaceMutex.Unlock()
-	if c.namespaceResolved {
-		return c.namespaceCache, nil
+	if namespace, ok := c.cachedDashboardNamespace(); ok {
+		return namespace, nil
 	}
+
 	var settings struct {
 		Namespace string `json:"namespace"`
 	}
@@ -170,15 +169,31 @@ func (c *Client) dashboardNamespace(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("discovering Grafana Cloud namespace: %w", err)
 	case err == nil && settings.Namespace != "" &&
 		(cloudHost || strings.HasPrefix(settings.Namespace, "stacks-")):
-		c.namespaceCache = settings.Namespace
-		c.namespaceResolved = true
+		return c.cacheDashboardNamespace(settings.Namespace), nil
 	case cloudHost:
 		return "", errEmptyCloudNamespace
 	default:
 		return c.organizationNamespace(), nil
 	}
+}
 
-	return c.namespaceCache, nil
+func (c *Client) cachedDashboardNamespace() (string, bool) {
+	c.namespaceMutex.Lock()
+	defer c.namespaceMutex.Unlock()
+
+	return c.namespaceCache, c.namespaceResolved
+}
+
+func (c *Client) cacheDashboardNamespace(namespace string) string {
+	c.namespaceMutex.Lock()
+	defer c.namespaceMutex.Unlock()
+	if c.namespaceResolved {
+		return c.namespaceCache
+	}
+	c.namespaceCache = namespace
+	c.namespaceResolved = true
+
+	return namespace
 }
 
 func (c *Client) organizationNamespace() string {

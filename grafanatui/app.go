@@ -1,6 +1,7 @@
 package grafanatui
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -153,6 +154,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case dashboardRefreshMsg:
 		return a.handleDashboardRefresh(msg)
+	case dashboardLoadedMsg:
+		return a.handleDashboardLoadedMsg(msg)
+	case panelDataMsg, panelErrorMsg:
+		return a.handlePanelResult(msg)
+	case variablesResolvedMsg, variablesResolveErrorMsg:
+		return a.handleVariablesResolution(msg)
+	case dashboardPanelDataMsg, dashboardPanelErrorMsg:
+		return a.handleDashboardPanelResult(msg)
 	case tea.KeyMsg:
 		return a.handleKeyMsg(msg)
 	case pushViewMsg:
@@ -173,20 +182,111 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleDashboardRefresh(msg dashboardRefreshMsg) (tea.Model, tea.Cmd) {
+	targetDashboard, targetPanel := a.refreshTarget()
 	commands := make([]tea.Cmd, 0)
 	for index, current := range a.views {
 		dashboard, ok := current.(*dashboardView)
-		if !ok {
+		if !ok || msg.generation != dashboard.generation {
 			continue
 		}
-		updated, command := dashboard.Update(msg)
-		a.views[index] = updated
+
+		var command tea.Cmd
+		switch {
+		case targetPanel != nil && targetPanel.uid == dashboard.uid:
+			command = tea.Batch(targetPanel.autoRefresh(), dashboard.scheduleRefresh())
+		case dashboard == targetDashboard:
+			var updated view
+			updated, command = dashboard.Update(msg)
+			a.views[index] = updated
+		default:
+			command = dashboard.scheduleRefresh()
+		}
 		if command != nil {
 			commands = append(commands, command)
 		}
 	}
 
 	return a, tea.Batch(commands...)
+}
+
+func (a *App) refreshTarget() (*dashboardView, *panelView) {
+	for index := range slices.Backward(a.views) {
+		switch current := a.views[index].(type) {
+		case *dashboardView:
+			return current, nil
+		case *panelView:
+			for _, candidate := range a.views {
+				if dashboard, ok := candidate.(*dashboardView); ok && dashboard.uid == current.uid {
+					return dashboard, current
+				}
+			}
+			return nil, current
+		case *dashboardListView:
+			return nil, nil
+		default:
+			// Picker overlays leave the panel or dashboard below them visible.
+		}
+	}
+
+	return nil, nil
+}
+
+func (a *App) handlePanelResult(msg tea.Msg) (tea.Model, tea.Cmd) {
+	_, panel := a.refreshTarget()
+	if panel == nil {
+		return a, nil
+	}
+	_, command := panel.Update(msg)
+
+	return a, command
+}
+
+func (a *App) handleVariablesResolution(msg tea.Msg) (tea.Model, tea.Cmd) {
+	dashboard, panel := a.refreshTarget()
+	if panel != nil {
+		_, command := panel.Update(msg)
+
+		return a, command
+	}
+	if dashboard != nil {
+		_, command := dashboard.Update(msg)
+
+		return a, command
+	}
+
+	return a, nil
+}
+
+func (a *App) handleDashboardPanelResult(msg tea.Msg) (tea.Model, tea.Cmd) {
+	dashboard, _ := a.refreshTarget()
+	if dashboard == nil {
+		return a, nil
+	}
+	_, command := dashboard.Update(msg)
+
+	return a, command
+}
+
+func (a *App) handleDashboardLoadedMsg(msg dashboardLoadedMsg) (tea.Model, tea.Cmd) {
+	panel, ok := a.views[len(a.views)-1].(*panelView)
+	if !ok {
+		return a.delegateToActiveView(msg)
+	}
+
+	model, command := a.delegateToActiveView(msg)
+	// Only a direct panel link has an unloaded grid without an existing tick chain.
+	for _, current := range a.views {
+		dashboard, isDashboard := current.(*dashboardView)
+		if !isDashboard || dashboard.uid != panel.uid || dashboard.dashboard != nil {
+			continue
+		}
+		if !dashboard.refreshSet {
+			dashboard.refresh = dashboardRefreshInterval(string(msg.dashboard.Refresh))
+		}
+		command = tea.Batch(command, dashboard.scheduleRefresh())
+	}
+
+	return model, command
 }
 
 func (a *App) handleErr(msg errMsg) (tea.Model, tea.Cmd) {
@@ -293,6 +393,8 @@ func (a *App) handlePopView() (tea.Model, tea.Cmd) {
 		}
 	case *dashboardView:
 		if current.dashboard == nil {
+			// Invalidate the direct panel's scheduler before loading the grid.
+			current.generation++
 			return a, current.Init()
 		}
 		// A zoomed panel shares its dashboard's time range, so a range picked

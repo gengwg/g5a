@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -32,12 +33,21 @@ scrape_configs:
       - targets: ["localhost:9090"]
 `
 
+// Images are pinned to the latest multi-architecture digests from 2026-11-20.
 const (
 	grafanaUser     = "admin"
 	grafanaPassword = "admin"
-	grafanaImage    = "grafana/grafana:latest"
-	prometheusImage = "prom/prometheus:latest"
+	grafanaImage    = "grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+	prometheusImage = "prom/prometheus@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06"
 )
+
+func integrationSetupFailure(t *testing.T, step string, err error) {
+	t.Helper()
+	if os.Getenv("CI") == "true" {
+		t.Fatalf("integration test: %s: %v", step, err)
+	}
+	t.Skipf("skipping integration test: %s: %v", step, err)
+}
 
 // setupGrafana starts Prometheus and Grafana containers on a shared
 // Docker network, adds Prometheus as a datasource in Grafana, creates
@@ -50,7 +60,7 @@ func setupGrafana(t *testing.T) *grafana.Client {
 	// Create a shared network so Grafana can reach Prometheus by name.
 	dockerNet, err := network.New(ctx)
 	if err != nil {
-		t.Skipf("skipping integration test: could not create docker network: %v", err)
+		integrationSetupFailure(t, "could not create docker network", err)
 	}
 
 	t.Cleanup(func() {
@@ -82,7 +92,7 @@ func setupGrafana(t *testing.T) *grafana.Client {
 		},
 	)
 	if err != nil {
-		t.Skipf("skipping integration test: could not start prometheus container: %v", err)
+		integrationSetupFailure(t, "could not start prometheus container", err)
 	}
 
 	t.Cleanup(func() {
@@ -110,7 +120,7 @@ func setupGrafana(t *testing.T) *grafana.Client {
 		},
 	)
 	if err != nil {
-		t.Skipf("skipping integration test: could not start grafana container: %v", err)
+		integrationSetupFailure(t, "could not start grafana container", err)
 	}
 
 	t.Cleanup(func() {

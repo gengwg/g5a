@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gengwg/g5a/grafana"
 )
 
@@ -136,6 +137,48 @@ func TestPanelViewChangeVariablesRejectsInFlightQuery(t *testing.T) {
 	}
 	if output := view.renderContent(80, 4); strings.Contains(output, "42") {
 		t.Errorf("old query result was displayed under the new selection:\n%s", output)
+	}
+}
+
+func TestPanelViewKeyGuardWaitsForVariables(t *testing.T) {
+	t.Parallel()
+
+	view := newPanelView(nil, "fixture")
+	view.dashboard = &grafana.Dashboard{}
+	view.panels = []grafana.Panel{{ID: 1}, {ID: 2}}
+	view.variableValues = map[string]string{"instance": "current"}
+	view.variablesReady = false
+	view.data = numericResult(42)
+	view.loading = false
+	_, command := view.handleKeyMsgGuarded(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if command != nil || view.index != 0 || view.data == nil || view.loading {
+		t.Error("navigation changed panel state while variables were not ready")
+	}
+}
+
+func TestPanelViewRetriesVariableResolution(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newDependentVariableClient(t)
+	view := newPanelView(client, "fixture")
+	view.dashboard = dependentVariableDashboard(t)
+	view.panels = grafana.FlattenPanels(view.dashboard.Panels)
+	view.variableValues = map[string]string{"env": "prod", "instance": "prod-a"}
+	view.variableGeneration = 1
+	view.variablesReady = false
+	view.err = errors.New("resolution failed")
+
+	_, command := view.handleKeyMsgGuarded(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if command == nil || view.err != nil || !view.loading {
+		t.Fatal("manual retry did not restart variable resolution")
+	}
+	resolved, ok := command().(variablesResolvedMsg)
+	if !ok {
+		t.Fatal("retry did not resolve variables")
+	}
+	_, command = view.Update(resolved)
+	if command == nil || !view.variablesReady || view.err != nil {
+		t.Error("panel did not recover after successful variable resolution")
 	}
 }
 

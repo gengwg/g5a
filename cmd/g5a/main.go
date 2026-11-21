@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -102,6 +104,7 @@ func resolvePositionalURL(current string, args []string, urlFlagSet bool) string
 
 // run creates the Grafana client and starts the TUI.
 func run(f flags) error {
+	stderr := os.Stderr
 	cleanup := initStderr(f.debug)
 	defer cleanup()
 
@@ -122,6 +125,7 @@ func run(f flags) error {
 	if err != nil {
 		return fmt.Errorf("creating grafana client: %w", err)
 	}
+	warnCleartextHTTP(stderr, client.BaseURL())
 
 	// Validate connection before entering TUI.
 	if err := client.Ping(context.Background()); err != nil {
@@ -144,6 +148,25 @@ func run(f flags) error {
 	}
 
 	return nil
+}
+
+func warnCleartextHTTP(writer io.Writer, rawURL string) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "http" {
+		return
+	}
+	hostname := parsed.Hostname()
+	if strings.EqualFold(hostname, "localhost") {
+		return
+	}
+	if ip := net.ParseIP(hostname); ip != nil && ip.IsLoopback() {
+		return
+	}
+	_, _ = fmt.Fprintf(
+		writer,
+		"warning: Grafana host %s uses cleartext HTTP; credentials and data can be intercepted\n",
+		hostname,
+	)
 }
 
 // resolveAuth builds client options from flags and env vars.

@@ -96,8 +96,9 @@ Grafana's complete field-override matcher set, color schemes, data links, and ev
 
 ## Refresh and failures
 
-- Dashboard refresh interval, or 30 seconds when unspecified; string durations and `refresh: false` are accepted.
+- Dashboard refresh interval, or 30 seconds when unspecified; string durations, including Grafana's `d` and `w` units, and `refresh: false` are accepted.
 - Explicit CLI interval overrides and `--refresh=0` to disable polling.
+- Zoomed panels use the dashboard interval; hidden dashboard grids do not issue queries.
 - Bounded panel-query concurrency and cancellation on new refreshes.
 - Stale responses cannot overwrite newer variable/time selections.
 - One failed panel does not clear other panels.

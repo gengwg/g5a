@@ -1,6 +1,6 @@
 module github.com/gengwg/g5a
 
-go 1.26.0
+go 1.26.11
 
 require (
 	github.com/NimbleMarkets/ntcharts v0.5.2

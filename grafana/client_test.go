@@ -3,11 +3,13 @@ package grafana_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gengwg/g5a/grafana"
@@ -36,7 +38,8 @@ func TestClient_BearerTokenAuth(t *testing.T) {
 	))
 	defer server.Close()
 
-	client, err := grafana.NewClient(server.URL,
+	rawURL := strings.Replace(server.URL, "://", "://ignored:ignored@", 1)
+	client, err := grafana.NewClient(rawURL,
 		grafana.WithToken("my-secret-token"),
 		grafana.WithHTTPClient(server.Client()),
 	)
@@ -179,6 +182,33 @@ func TestClient_APIErrorDoesNotExposeResponseBody(t *testing.T) {
 	}
 }
 
+func TestClient_APIErrorTakesPrecedenceOverBodyReadError(t *testing.T) {
+	t.Parallel()
+
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{ //nolint:exhaustruct // synthetic test response
+			StatusCode: http.StatusBadRequest,
+			Status:     "400 Bad Request",
+			Body:       io.NopCloser(&errorReader{err: errors.New("connection reset")}),
+			Request:    request,
+		}, nil
+	})
+	client, err := grafana.NewClient(
+		"https://grafana.example.com",
+		grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err == nil || !strings.Contains(err.Error(), "400 Bad Request") {
+		t.Fatalf("error = %v, want HTTP status", err)
+	}
+	if strings.Contains(err.Error(), "reading response") {
+		t.Fatalf("body read error hid HTTP status: %v", err)
+	}
+}
+
 func TestClient_TransportErrorDoesNotExposeUserinfo(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +233,185 @@ func TestClient_TransportErrorDoesNotExposeUserinfo(t *testing.T) {
 	if strings.Contains(err.Error(), "user") || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error exposed URL userinfo: %v", err)
 	}
+}
+
+func TestClient_URLUserinfoIsUsedForAuthButNotDisplayed(t *testing.T) {
+	t.Parallel()
+
+	var gotUsername, gotPassword string
+	var gotOK bool
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotUsername, gotPassword, gotOK = r.BasicAuth()
+			_, _ = w.Write([]byte(`[]`))
+		},
+	))
+	defer server.Close()
+
+	rawURL := strings.Replace(server.URL, "://", "://svc:s3cret@", 1)
+	client, err := grafana.NewClient(rawURL, grafana.WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := client.BaseURL(); got != server.URL {
+		t.Errorf("base URL = %q, want %q", got, server.URL)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotOK || gotUsername != "svc" || gotPassword != "s3cret" {
+		t.Errorf("basic auth = %q/%q, %v", gotUsername, gotPassword, gotOK)
+	}
+}
+
+func TestClient_ResponseBodyReadError(t *testing.T) {
+	t.Parallel()
+
+	readErr := errors.New("connection reset")
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{ //nolint:exhaustruct // synthetic test response
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(&errorReader{err: readErr}),
+			Request:    request,
+		}, nil
+	})
+	client, err := grafana.NewClient(
+		"https://grafana.example.com",
+		grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if !errors.Is(err, readErr) {
+		t.Fatalf("error = %v, want wrapped read error", err)
+	}
+}
+
+func TestClient_ResponseBodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{ //nolint:exhaustruct // synthetic test response
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(io.LimitReader(zeroReader{}, 32<<20+1)),
+			Request:    request,
+		}, nil
+	})
+	client, err := grafana.NewClient(
+		"https://grafana.example.com",
+		grafana.WithHTTPClient(&http.Client{Transport: transport}), //nolint:exhaustruct // test client
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v, want response size error", err)
+	}
+}
+
+func TestClient_RejectsCrossOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name         string
+		sourceHost   string
+		customClient bool
+	}{
+		{name: "different hostname", sourceHost: "localhost", customClient: false},
+		{name: "same hostname different port", sourceHost: "127.0.0.1", customClient: false},
+		{name: "custom client different hostname", sourceHost: "localhost", customClient: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var destinationRequests atomic.Int32
+			destination := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) {
+					destinationRequests.Add(1)
+					_, _ = w.Write([]byte(`[]`))
+				},
+			))
+			defer destination.Close()
+			source := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, destination.URL+"/steal", http.StatusFound)
+				},
+			))
+			defer source.Close()
+
+			sourceURL := strings.Replace(source.URL, "127.0.0.1", test.sourceHost, 1)
+			opts := []grafana.ClientOption{grafana.WithToken("secret-token")}
+			if test.customClient {
+				opts = append(opts, grafana.WithHTTPClient(source.Client()))
+			}
+			client, err := grafana.NewClient(sourceURL, opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.SearchDashboards(t.Context(), "")
+			if err == nil || !strings.Contains(err.Error(), "refusing redirect") {
+				t.Fatalf("error = %v, want redirect rejection", err)
+			}
+			if got := destinationRequests.Load(); got != 0 {
+				t.Errorf("redirect target received %d requests, want 0", got)
+			}
+		})
+	}
+}
+
+func TestClient_AllowsSameHostRedirect(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/search":
+				http.Redirect(w, r, "/api/search/", http.StatusFound)
+			case "/api/search/":
+				gotAuth = r.Header.Get("Authorization")
+				_, _ = w.Write([]byte(`[]`))
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	))
+	defer server.Close()
+
+	client, err := grafana.NewClient(server.URL, grafana.WithToken("secret-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SearchDashboards(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer secret-token" {
+		t.Errorf("auth header = %q", gotAuth)
+	}
+}
+
+type errorReader struct {
+	err error
+}
+
+func (r *errorReader) Read(buffer []byte) (int, error) {
+	copy(buffer, "[]")
+
+	return 2, r.err
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(buffer []byte) (int, error) {
+	clear(buffer)
+
+	return len(buffer), nil
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
